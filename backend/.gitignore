@@ -1,0 +1,27 @@
+# ---- Virtual environment ----
+venv/
+.venv/
+env/
+
+# ---- Python cache ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# ---- Environment ----
+.env
+.env.*
+
+# ---- Data cache (runtime) ----
+data/cache/
+
+# ---- Большие файлы графов (>50 MB, хранить локально) ----
+data/walk_graph/*.graphml
+data/walk_graph/walk_edges.geojson
+data/drive_graph/*.graphml
+data/drive_graph/drive_edges.geojson
+
+# ---- IDE ----
+.idea/
+.vscode/

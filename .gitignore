@@ -1,0 +1,19 @@
+# ---- Исключённые папки проекта ----
+algorithm&data/
+.claude/
+
+# ---- Приватные файлы ----
+CLAUDE.md
+main_task.md
+
+# ---- Python (общее) ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.env
+.env.*
+
+# ---- OS ----
+.DS_Store
+Thumbs.db

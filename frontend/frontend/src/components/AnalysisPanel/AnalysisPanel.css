@@ -1,0 +1,145 @@
+.analysis-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analysis-panel__title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.analysis-panel__hint {
+  font-size: 13px;
+  color: #94a3b8;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.analysis-panel__building {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f1f5f9;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.analysis-panel__building-icon {
+  font-size: 16px;
+}
+
+.analysis-panel__building-coords {
+  font-size: 12px;
+  color: #475569;
+  font-family: 'Courier New', monospace;
+}
+
+.analysis-panel__btn {
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.analysis-panel__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.analysis-panel__btn:not(:disabled):active {
+  transform: scale(0.98);
+}
+
+.analysis-panel__btn--primary {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.analysis-panel__btn--primary:not(:disabled):hover {
+  background: #2563eb;
+}
+
+.analysis-panel__btn--secondary {
+  background: #a855f7;
+  color: #fff;
+}
+
+.analysis-panel__btn--secondary:not(:disabled):hover {
+  background: #9333ea;
+}
+
+.analysis-panel__results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.analysis-panel__result-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border-left: 3px solid transparent;
+}
+
+.analysis-panel__result-item.ok {
+  background: #f0fdf4;
+  border-color: #22c55e;
+}
+
+.analysis-panel__result-item.fail {
+  background: #fef2f2;
+  border-color: #ef4444;
+}
+
+.analysis-panel__result-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.analysis-panel__result-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.analysis-panel__result-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.analysis-panel__result-norm {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.analysis-panel__badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.analysis-panel__badge.ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.analysis-panel__badge.fail {
+  background: #fee2e2;
+  color: #991b1b;
+}
