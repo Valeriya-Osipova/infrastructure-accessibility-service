@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { AnalyzeResponse, ObjectType, SelectedBuilding, AppStatus } from '../../types';
 import './AnalysisPanel.css';
 
@@ -5,6 +6,11 @@ interface AnalysisPanelProps {
   selectedBuilding: SelectedBuilding | null;
   status: AppStatus;
   analyzeResult: AnalyzeResponse | null;
+  analysisDuration: number | null;
+  dataWarning: string | null;
+  inputMode: 'click' | 'coords';
+  onInputModeChange: (mode: 'click' | 'coords') => void;
+  onManualCoordSelect: (lat: number, lon: number) => void;
   onAnalyze: () => void;
   onOptimize: (type: ObjectType) => void;
 }
@@ -25,35 +31,143 @@ export default function AnalysisPanel({
   selectedBuilding,
   status,
   analyzeResult,
+  analysisDuration,
+  dataWarning,
+  inputMode,
+  onInputModeChange,
+  onManualCoordSelect,
   onAnalyze,
   onOptimize,
 }: AnalysisPanelProps) {
+  const [latInput, setLatInput] = useState('');
+  const [lonInput, setLonInput] = useState('');
+  const [coordError, setCoordError] = useState<string | null>(null);
+
+  const isAnalyzing = status === 'analyzing' || status === 'fetching_coverage';
   const isOptimizing = status === 'optimizing';
+
+  function handleCoordSubmit() {
+    const lat = parseFloat(latInput);
+    const lon = parseFloat(lonInput);
+
+    console.log(latInput, lonInput);
+    
+    if (isNaN(lat) || lat < -90 || lat > 90) {
+      setCoordError('Широта должна быть числом от -90 до 90');
+      return;
+    }
+    if (isNaN(lon) || lon < -180 || lon > 180) {
+      setCoordError('Долгота должна быть числом от -180 до 180');
+      return;
+    }
+    setCoordError(null);
+    onManualCoordSelect(lat, lon);
+  }
 
   return (
     <div className="analysis-panel">
       <h3 className="analysis-panel__title">Анализ доступности</h3>
 
-      {!selectedBuilding ? (
+      {/* Переключатель режима */}
+      <div className="analysis-panel__mode-tabs">
+        <button
+          className={`analysis-panel__mode-tab${inputMode === 'click' ? ' active' : ''}`}
+          onClick={() => onInputModeChange('click')}
+        >
+          На карте
+        </button>
+        <button
+          className={`analysis-panel__mode-tab${inputMode === 'coords' ? ' active' : ''}`}
+          onClick={() => onInputModeChange('coords')}
+        >
+          По координатам
+        </button>
+      </div>
+
+      {/* Ручной ввод координат */}
+      {inputMode === 'coords' && (
+        <div className="analysis-panel__coords-form">
+          <div className="analysis-panel__coord-row">
+            <label className="analysis-panel__coord-label">Широта</label>
+            <input
+              className={`analysis-panel__coord-input${coordError ? ' error' : ''}`}
+              type="number"
+              step="any"
+              value={latInput}
+              onChange={(e) => { setLatInput(e.target.value); setCoordError(null); }}
+            />
+          </div>
+          <div className="analysis-panel__coord-row">
+            <label className="analysis-panel__coord-label">Долгота</label>
+            <input
+              className={`analysis-panel__coord-input${coordError ? ' error' : ''}`}
+              type="number"
+              step="any"
+              value={lonInput}
+              onChange={(e) => { setLonInput(e.target.value); setCoordError(null); }}
+            />
+          </div>
+          {coordError && <p className="analysis-panel__coord-error">{coordError}</p>}
+          <button
+            className="analysis-panel__btn analysis-panel__btn--secondary"
+            onClick={handleCoordSubmit}
+          >
+            Выбрать точку
+          </button>
+        </div>
+      )}
+
+      {/* Подсказка при отсутствии выбранной точки */}
+      {!selectedBuilding && inputMode === 'click' && (
         <p className="analysis-panel__hint">
           Нажмите на жилой дом на карте, чтобы выбрать его.
         </p>
-      ) : (
+      )}
+
+      {/* Выбранная точка */}
+      {selectedBuilding && (
         <>
           <div className="analysis-panel__building">
-            <span className="analysis-panel__building-icon">🏠</span>
-            <span className="analysis-panel__building-coords">
-              {selectedBuilding.lat.toFixed(5)}, {selectedBuilding.lon.toFixed(5)}
+            <span className="analysis-panel__building-icon">
+              {selectedBuilding.snapped ? '🏠' : '📍'}
             </span>
+            <div className="analysis-panel__building-info">
+              <span className="analysis-panel__building-coords">
+                {selectedBuilding.lat.toFixed(5)}, {selectedBuilding.lon.toFixed(5)}
+              </span>
+              <span className="analysis-panel__building-tag">
+                {selectedBuilding.snapped
+                  ? 'привязка к ближайшему зданию'
+                  : 'точные координаты'}
+              </span>
+            </div>
           </div>
+
+          {/* Предупреждение о зоне без данных */}
+          {dataWarning && (
+            <div className="analysis-panel__data-warning">
+              {dataWarning}
+            </div>
+          )}
 
           <button
             className="analysis-panel__btn analysis-panel__btn--primary"
             onClick={onAnalyze}
-            disabled={status === 'analyzing'}
+            disabled={isAnalyzing}
           >
-            {status === 'analyzing' ? 'Анализируется...' : 'Выполнить анализ'}
+            {isAnalyzing && <span className="analysis-panel__spinner" />}
+            {status === 'fetching_coverage'
+              ? 'Загрузка данных OSM...'
+              : isAnalyzing
+              ? 'Выполняется анализ...'
+              : 'Выполнить анализ'}
           </button>
+
+          {analysisDuration !== null && !isAnalyzing && (
+            <p className="analysis-panel__timing">
+              Выполнено за {analysisDuration.toFixed(1)} с
+            </p>
+          )}
 
           {analyzeResult && (
             <div className="analysis-panel__results">

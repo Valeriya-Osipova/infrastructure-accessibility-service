@@ -1,4 +1,4 @@
-import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useRef, forwardRef, useImperativeHandle, useState } from 'react';
 import Map from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
@@ -6,7 +6,7 @@ import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
 import OSM from 'ol/source/OSM';
 import GeoJSON from 'ol/format/GeoJSON';
-import { fromLonLat } from 'ol/proj';
+import { fromLonLat, toLonLat } from 'ol/proj';
 import { Style, Fill, Stroke, Circle, RegularShape } from 'ol/style';
 import { Feature } from 'ol';
 import { Point } from 'ol/geom';
@@ -25,6 +25,8 @@ export interface MapViewHandle {
   showSuggestions: (sites: [number, number][], fallback: GeoJSONFeature) => void;
   clearOverlays: () => void;
   setLayerVisible: (layer: keyof LayerVisibility, visible: boolean) => void;
+  /** Показывает маркер на произвольных координатах (ручной ввод без привязки к зданию) */
+  selectCoordinate: (lon: number, lat: number) => void;
 }
 
 interface MapViewProps {
@@ -68,6 +70,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
   ({ buildings, kindergartens, schools, hospitals, onBuildingSelect }, ref) => {
     const mapRef = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<Map | null>(null);
+    const [cursorCoords, setCursorCoords] = useState<{ lat: number; lon: number } | null>(null);
 
     const buildingsSource = useRef(new VectorSource());
     const kindergartenSource = useRef(new VectorSource());
@@ -161,6 +164,13 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         };
         map[layer]?.setVisible(visible);
       },
+
+      selectCoordinate(lon: number, lat: number) {
+        selectedSource.current.clear();
+        const feat = new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
+        selectedSource.current.addFeature(feat);
+        mapInstance.current?.getView().animate({ center: fromLonLat([lon, lat]), zoom: 14, duration: 400 });
+      },
     }));
 
     // Init map once
@@ -235,6 +245,23 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         }),
       });
 
+      // Отслеживаем движение курсора для отображения координат
+      mapInstance.current.on('pointermove', (event) => {
+        const coords = mapInstance.current!.getCoordinateFromPixel(event.pixel);
+        if (coords) {
+          const [lon, lat] = toLonLat(coords);
+          setCursorCoords({
+            lat: Number(lat.toFixed(6)),
+            lon: Number(lon.toFixed(6))
+          });
+        }
+      });
+
+      // Убираем координаты при выходе курсора с карты
+      mapInstance.current.getTargetElement().addEventListener('mouseleave', () => {
+        setCursorCoords(null);
+      });
+
       mapInstance.current.on('click', (event) => {
         const features = mapInstance.current!.getFeaturesAtPixel(event.pixel, {
           layerFilter: (l) => l === buildingsLayer.current,
@@ -305,7 +332,16 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
       );
     }, [hospitals]);
 
-    return <div ref={mapRef} className="map-container" />;
+    return (
+      <>
+        <div ref={mapRef} className="map-container" />
+        {cursorCoords && (
+          <div className="map-cursor-coords">
+            📍 {cursorCoords.lat.toFixed(6)}°, {cursorCoords.lon.toFixed(6)}°
+          </div>
+        )}
+      </>
+    );
   },
 );
 
