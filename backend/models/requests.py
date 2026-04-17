@@ -26,3 +26,7 @@ class IsochroneRequest(CoordRequest):
     limit_type: Literal["meters", "minutes"] = Field(
         default="minutes", description="Единица лимита"
     )
+
+
+class FetchCoverageRequest(CoordRequest):
+    pass
