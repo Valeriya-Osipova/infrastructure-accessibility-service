@@ -60,10 +60,19 @@ export type ObjectType = 'kindergarten' | 'school' | 'hospital';
 
 export type LayerVisibility = {
   buildings: boolean;
-  infrastructure: boolean;
+  kindergarten: boolean;
+  school: boolean;
+  hospital: boolean;
   isochrones: boolean;
   suggestions: boolean;
 };
+
+/** Запись об изохроне с привязкой к типу объекта */
+export interface IsochroneEntry {
+  feature: GeoJSONFeature;
+  type: ObjectType;
+  mode: 'walk' | 'drive';
+}
 
 export interface SelectedBuilding {
   lon: number;
