@@ -86,11 +86,43 @@
 
 .analysis-panel__result-item {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 12px;
   border-radius: 8px;
   border-left: 3px solid transparent;
+}
+
+.analysis-panel__result-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.analysis-panel__result-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.analysis-panel__suggest-btn {
+  padding: 4px 10px;
+  background: #a855f7;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.analysis-panel__suggest-btn:hover:not(:disabled) {
+  background: #9333ea;
+}
+
+.analysis-panel__suggest-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .analysis-panel__result-item.ok {

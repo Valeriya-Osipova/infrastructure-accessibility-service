@@ -1,4 +1,4 @@
-import type { AnalyzeResponse, SelectedBuilding, AppStatus } from '../../types';
+import type { AnalyzeResponse, ObjectType, SelectedBuilding, AppStatus } from '../../types';
 import './AnalysisPanel.css';
 
 interface AnalysisPanelProps {
@@ -6,7 +6,7 @@ interface AnalysisPanelProps {
   status: AppStatus;
   analyzeResult: AnalyzeResponse | null;
   onAnalyze: () => void;
-  onOptimize: () => void;
+  onOptimize: (type: ObjectType) => void;
 }
 
 const ICONS: Record<string, string> = {
@@ -28,9 +28,7 @@ export default function AnalysisPanel({
   onAnalyze,
   onOptimize,
 }: AnalysisPanelProps) {
-  const hasViolations =
-    analyzeResult &&
-    Object.values(analyzeResult).some((r) => !r.ok);
+  const isOptimizing = status === 'optimizing';
 
   return (
     <div className="analysis-panel">
@@ -66,30 +64,32 @@ export default function AnalysisPanel({
                     key={type}
                     className={`analysis-panel__result-item ${result.ok ? 'ok' : 'fail'}`}
                   >
-                    <span className="analysis-panel__result-icon">{ICONS[type]}</span>
-                    <div className="analysis-panel__result-info">
-                      <span className="analysis-panel__result-name">{LABELS[type]}</span>
-                      <span className="analysis-panel__result-norm">{result.norm}</span>
+                    <div className="analysis-panel__result-row">
+                      <span className="analysis-panel__result-icon">{ICONS[type]}</span>
+                      <div className="analysis-panel__result-info">
+                        <span className="analysis-panel__result-name">{LABELS[type]}</span>
+                        <span className="analysis-panel__result-norm">{result.norm}</span>
+                      </div>
+                      <span className={`analysis-panel__badge ${result.ok ? 'ok' : 'fail'}`}>
+                        {result.ok ? 'OK' : 'Нарушение'}
+                      </span>
                     </div>
-                    <span className={`analysis-panel__badge ${result.ok ? 'ok' : 'fail'}`}>
-                      {result.ok ? 'OK' : 'Нарушение'}
-                    </span>
+
+                    {!result.ok && (
+                      <div className="analysis-panel__result-actions">
+                        <button
+                          className="analysis-panel__suggest-btn"
+                          onClick={() => onOptimize(type)}
+                          disabled={isOptimizing}
+                        >
+                          {isOptimizing ? '...' : '↗ Предложить размещение'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
-          )}
-
-          {hasViolations && (
-            <button
-              className="analysis-panel__btn analysis-panel__btn--secondary"
-              onClick={onOptimize}
-              disabled={status === 'optimizing'}
-            >
-              {status === 'optimizing'
-                ? 'Поиск мест...'
-                : 'Предложить размещение'}
-            </button>
           )}
         </>
       )}
