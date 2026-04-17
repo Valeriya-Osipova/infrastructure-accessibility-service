@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Tuple, Literal, Dict, Any
 
@@ -26,12 +27,12 @@ def _load_graph(mode: Literal["walk", "drive"]) -> Dict[str, Any]:
         graph_path = os.path.join(DATA_DIR, "walk_graph", "walk.graphml")
         edges_path = os.path.join(DATA_DIR, "walk_graph", "walk_edges.geojson")
         speed_mps = 1.3
-        buffer_size = 50
+        buffer_size = 100
     elif mode == "drive":
         graph_path = os.path.join(DATA_DIR, "drive_graph", "drive_graph.graphml")
         edges_path = os.path.join(DATA_DIR, "drive_graph", "drive_edges.geojson")
         speed_mps = None
-        buffer_size = 70
+        buffer_size = 200 
     else:
         raise ValueError("mode must be 'walk' or 'drive'")
 
@@ -40,7 +41,22 @@ def _load_graph(mode: Literal["walk", "drive"]) -> Dict[str, Any]:
     for _, _, data in G.edges(data=True):
         data["weight"] = float(data["weight"])
 
-    edges_gdf = gpd.read_file(edges_path).set_crs(epsg=4326, allow_override=True)
+    with open(edges_path, encoding="utf-8") as f:
+        raw = json.load(f)
+    edges_gdf = gpd.GeoDataFrame.from_features(
+        [
+            {
+                "type": "Feature",
+                "geometry": feat["geometry"],
+                "properties": {
+                    "u": str(feat["properties"]["u"]),
+                    "v": str(feat["properties"]["v"]),
+                },
+            }
+            for feat in raw["features"]
+        ],
+        crs="EPSG:4326",
+    )
 
     edges_gdf["u"] = edges_gdf["u"].astype(str)
     edges_gdf["v"] = edges_gdf["v"].astype(str)
@@ -108,18 +124,24 @@ def build_isochrone(
     if limit_type == "meters":
         if mode == "drive":
             raise ValueError("Для drive используйте минуты")
-        time_limit = (limit / speed_mps) * 1.2  # запас 20%
+        time_limit = (limit / speed_mps) * 1.5  # запас 50%
     elif limit_type == "minutes":
         time_limit = limit * 60 * 2
     else:
         raise ValueError("limit_type must be 'meters' or 'minutes'")
 
-    _, idx = kdtree.query(coord)
-    source_node = node_ids[idx]
+    # Берём K ближайших узлов вместо одного — защита от тупиков сети
+    K_SOURCES = 3
+    k = min(K_SOURCES, len(node_ids))
+    _, idxs = kdtree.query(coord, k=k)
+    if k == 1:
+        source_nodes = [node_ids[int(idxs)]]
+    else:
+        source_nodes = [node_ids[int(i)] for i in idxs]
 
-    reachable = nx.single_source_dijkstra_path_length(
+    reachable = nx.multi_source_dijkstra_path_length(
         G,
-        source=source_node,
+        sources=source_nodes,
         cutoff=time_limit,
         weight="weight",
     )
@@ -151,7 +173,7 @@ def build_isochrone(
             "limit": limit,
             "limit_type": limit_type,
             "time_limit_sec": round(time_limit, 2),
-            "source_node": source_node,
+            "source_node": source_nodes[0],
             "reachable_nodes": len(reachable_nodes),
         },
     }

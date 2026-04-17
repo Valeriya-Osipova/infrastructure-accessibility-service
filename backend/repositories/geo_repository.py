@@ -33,6 +33,17 @@ def get_infrastructure() -> Dict[str, Any]:
 
 
 @lru_cache(maxsize=None)
+def get_infrastructure_by_type(amenity_types: tuple) -> Dict[str, Any]:
+    """Возвращает отфильтрованный GeoJSON по типу amenity."""
+    all_data = get_infrastructure()
+    features = [
+        f for f in all_data["features"]
+        if f.get("properties", {}).get("amenity") in amenity_types
+    ]
+    return {"type": "FeatureCollection", "features": features}
+
+
+@lru_cache(maxsize=None)
 def get_low_density_areas() -> Dict[str, Any]:
     """Возвращает GeoJSON FeatureCollection зон низкой плотности населения."""
     return _load_geojson("final_areas.geojson")
