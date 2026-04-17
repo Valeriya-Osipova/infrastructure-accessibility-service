@@ -7,10 +7,7 @@ import type {
 
 const BASE_URL = 'http://localhost:8000';
 
-async function request<T>(
-  path: string,
-  options?: RequestInit,
-): Promise<T> {
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
@@ -27,8 +24,16 @@ export const api = {
     return request('/buildings');
   },
 
-  getInfrastructure(): Promise<GeoJSONFeatureCollection> {
-    return request('/infrastructure');
+  getKindergartens(): Promise<GeoJSONFeatureCollection> {
+    return request('/infrastructure/kindergarten');
+  },
+
+  getSchools(): Promise<GeoJSONFeatureCollection> {
+    return request('/infrastructure/school');
+  },
+
+  getHospitals(): Promise<GeoJSONFeatureCollection> {
+    return request('/infrastructure/hospital');
   },
 
   analyze(lat: number, lon: number): Promise<AnalyzeResponse> {
@@ -38,11 +43,7 @@ export const api = {
     });
   },
 
-  optimize(
-    lat: number,
-    lon: number,
-    failedTypes?: ObjectType[],
-  ): Promise<OptimizeResponse> {
+  optimize(lat: number, lon: number, failedTypes?: ObjectType[]): Promise<OptimizeResponse> {
     return request('/optimize', {
       method: 'POST',
       body: JSON.stringify({ lat, lon, failed_types: failedTypes ?? null }),

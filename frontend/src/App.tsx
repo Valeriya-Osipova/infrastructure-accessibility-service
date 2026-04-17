@@ -8,40 +8,60 @@ import { api } from './services/api';
 import type {
   AnalyzeResponse,
   AppStatus,
-  GeoJSONFeature,
   GeoJSONFeatureCollection,
+  IsochroneEntry,
   LayerVisibility,
+  ObjectType,
   OptimizeResponse,
   SelectedBuilding,
 } from './types';
 import './App.css';
 
+interface ModalEntry {
+  id: string;
+  data: OptimizeResponse;
+  type: ObjectType;
+}
+
 export default function App() {
   const mapRef = useRef<MapViewHandle>(null);
 
   const [buildings, setBuildings] = useState<GeoJSONFeatureCollection | null>(null);
-  const [infrastructure, setInfrastructure] = useState<GeoJSONFeatureCollection | null>(null);
+  const [kindergartens, setKindergartens] = useState<GeoJSONFeatureCollection | null>(null);
+  const [schools, setSchools] = useState<GeoJSONFeatureCollection | null>(null);
+  const [hospitals, setHospitals] = useState<GeoJSONFeatureCollection | null>(null);
+
   const [selectedBuilding, setSelectedBuilding] = useState<SelectedBuilding | null>(null);
   const [analyzeResult, setAnalyzeResult] = useState<AnalyzeResponse | null>(null);
-  const [optimizeResult, setOptimizeResult] = useState<OptimizeResponse | null>(null);
   const [status, setStatus] = useState<AppStatus>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [showModal, setShowModal] = useState(false);
+
+  // Независимые плавающие отчёты
+  const [modals, setModals] = useState<ModalEntry[]>([]);
 
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({
     buildings: true,
-    infrastructure: true,
-    isochrones: true,
-    suggestions: true,
+    kindergarten: true,
+    school: true,
+    hospital: true,
+    isochrones: false,
+    suggestions: false,
   });
 
   // Load data on mount
   useEffect(() => {
     setStatus('loading_layers');
-    Promise.all([api.getBuildings(), api.getInfrastructure()])
-      .then(([b, i]) => {
+    Promise.all([
+      api.getBuildings(),
+      api.getKindergartens(),
+      api.getSchools(),
+      api.getHospitals(),
+    ])
+      .then(([b, k, s, h]) => {
         setBuildings(b);
-        setInfrastructure(i);
+        setKindergartens(k);
+        setSchools(s);
+        setHospitals(h);
         setStatus('idle');
       })
       .catch((e) => {
@@ -53,25 +73,20 @@ export default function App() {
   // Sync layer visibility to map
   useEffect(() => {
     if (!mapRef.current) return;
-    mapRef.current.setLayerVisible('buildings', layerVisibility.buildings);
-    mapRef.current.setLayerVisible('infrastructure', layerVisibility.infrastructure);
-    mapRef.current.setLayerVisible('isochrones', layerVisibility.isochrones);
-    mapRef.current.setLayerVisible('suggestions', layerVisibility.suggestions);
+    (Object.keys(layerVisibility) as (keyof LayerVisibility)[]).forEach((key) => {
+      mapRef.current!.setLayerVisible(key, layerVisibility[key]);
+    });
   }, [layerVisibility]);
 
-  const handleLayerChange = useCallback(
-    (layer: keyof LayerVisibility, value: boolean) => {
-      setLayerVisibility((prev) => ({ ...prev, [layer]: value }));
-    },
-    [],
-  );
+  const handleLayerChange = useCallback((layer: keyof LayerVisibility, value: boolean) => {
+    setLayerVisibility((prev) => ({ ...prev, [layer]: value }));
+  }, []);
 
   const handleBuildingSelect = useCallback((building: SelectedBuilding) => {
     setSelectedBuilding(building);
     setAnalyzeResult(null);
-    setOptimizeResult(null);
-    setShowModal(false);
     mapRef.current?.clearOverlays();
+    setLayerVisibility((prev) => ({ ...prev, isochrones: false, suggestions: false }));
     setStatus('building_selected');
   }, []);
 
@@ -80,23 +95,28 @@ export default function App() {
     setStatus('analyzing');
     setError(null);
     setAnalyzeResult(null);
-    setOptimizeResult(null);
     mapRef.current?.clearOverlays();
+    setLayerVisibility((prev) => ({ ...prev, isochrones: false, suggestions: false }));
 
     try {
       const result = await api.analyze(selectedBuilding.lat, selectedBuilding.lon);
       setAnalyzeResult(result);
+
+      const entries: IsochroneEntry[] = [];
+      if (result.kindergarten.isochrone)
+        entries.push({ feature: result.kindergarten.isochrone, type: 'kindergarten', mode: 'walk' });
+      if (result.school.iso_walk)
+        entries.push({ feature: result.school.iso_walk, type: 'school', mode: 'walk' });
+      if (result.school.iso_drive)
+        entries.push({ feature: result.school.iso_drive, type: 'school', mode: 'drive' });
+      if (result.hospital.iso_walk)
+        entries.push({ feature: result.hospital.iso_walk, type: 'hospital', mode: 'walk' });
+      if (result.hospital.iso_drive)
+        entries.push({ feature: result.hospital.iso_drive, type: 'hospital', mode: 'drive' });
+
+      mapRef.current?.showIsochrones(entries);
+      setLayerVisibility((prev) => ({ ...prev, isochrones: true }));
       setStatus('analyzed');
-
-      // Collect all isochrones to display
-      const isoFeatures: GeoJSONFeature[] = [];
-      if (result.kindergarten.isochrone) isoFeatures.push(result.kindergarten.isochrone);
-      if (result.school.iso_walk) isoFeatures.push(result.school.iso_walk);
-      if (result.school.iso_drive) isoFeatures.push(result.school.iso_drive);
-      if (result.hospital.iso_walk) isoFeatures.push(result.hospital.iso_walk);
-      if (result.hospital.iso_drive) isoFeatures.push(result.hospital.iso_drive);
-
-      mapRef.current?.showIsochrones(isoFeatures);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(`Ошибка анализа: ${msg}`);
@@ -104,39 +124,49 @@ export default function App() {
     }
   }, [selectedBuilding]);
 
-  const handleOptimize = useCallback(async () => {
-    if (!selectedBuilding || !analyzeResult) return;
+  // Оптимизация для конкретного типа — не трогает изохроны
+  const handleOptimize = useCallback(async (type: ObjectType) => {
+    if (!selectedBuilding) return;
     setStatus('optimizing');
     setError(null);
 
-    const failedTypes = (['kindergarten', 'school', 'hospital'] as const).filter(
-      (t) => !analyzeResult[t].ok,
-    );
-
     try {
-      const result = await api.optimize(selectedBuilding.lat, selectedBuilding.lon, failedTypes);
-      setOptimizeResult(result);
-      setStatus('optimized');
-      setShowModal(true);
+      const result = await api.optimize(selectedBuilding.lat, selectedBuilding.lon, [type]);
 
-      // Show suggestions on map (take first available type)
-      for (const [, rec] of Object.entries(result.recommendations)) {
-        if (rec) {
-          mapRef.current?.showSuggestions(rec.recommended_sites, rec.fallback_zone);
-          break;
-        }
+      // Показываем предложения на карте
+      const rec = result.recommendations[type];
+      if (rec) {
+        mapRef.current?.showSuggestions(rec.recommended_sites, rec.fallback_zone);
+        setLayerVisibility((prev) => ({ ...prev, suggestions: true }));
       }
+
+      // Добавляем новый независимый отчёт (не закрываем старые)
+      setModals((prev) => [
+        ...prev,
+        { id: `${type}-${Date.now()}`, data: result, type },
+      ]);
+
+      setStatus('optimized');
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(`Ошибка оптимизации: ${msg}`);
       setStatus('error');
     }
-  }, [selectedBuilding, analyzeResult]);
+  }, [selectedBuilding]);
+
+  const handleCloseModal = useCallback((id: string) => {
+    setModals((prev) => prev.filter((m) => m.id !== id));
+  }, []);
 
   return (
     <div className="app">
       <Sidebar>
-        <LayerControl visibility={layerVisibility} onChange={handleLayerChange} />
+        <LayerControl
+          visibility={layerVisibility}
+          onChange={handleLayerChange}
+          hasIsochrones={analyzeResult !== null}
+          hasSuggestions={modals.length > 0}
+        />
         <AnalysisPanel
           selectedBuilding={selectedBuilding}
           status={status}
@@ -154,14 +184,24 @@ export default function App() {
         <MapView
           ref={mapRef}
           buildings={buildings}
-          infrastructure={infrastructure}
+          kindergartens={kindergartens}
+          schools={schools}
+          hospitals={hospitals}
           onBuildingSelect={handleBuildingSelect}
         />
       </main>
 
-      {showModal && optimizeResult && (
-        <ResultModal data={optimizeResult} onClose={() => setShowModal(false)} />
-      )}
+      {/* Независимые плавающие отчёты */}
+      {modals.map((modal, index) => (
+        <ResultModal
+          key={modal.id}
+          id={modal.id}
+          data={modal.data}
+          type={modal.type}
+          modalIndex={index}
+          onClose={handleCloseModal}
+        />
+      ))}
     </div>
   );
 }
