@@ -23,6 +23,19 @@ interface ModalEntry {
   type: ObjectType;
 }
 
+/** Формула гаверсинуса — расстояние в метрах между двумя точками (lat/lon). */
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6_371_000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
+
 export default function App() {
   const mapRef = useRef<MapViewHandle>(null);
 
@@ -39,6 +52,16 @@ export default function App() {
   // Независимые плавающие отчёты
   const [modals, setModals] = useState<ModalEntry[]>([]);
 
+  // Режим выбора точки
+  const [inputMode, setInputMode] = useState<'click' | 'coords'>('click');
+
+  // Время выполнения анализа
+  const analysisStartRef = useRef<number | null>(null);
+  const [analysisDuration, setAnalysisDuration] = useState<number | null>(null);
+
+  // Предупреждение о зоне без данных (задача 4)
+  const [dataWarning, setDataWarning] = useState<string | null>(null);
+
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({
     buildings: true,
     kindergarten: true,
@@ -48,7 +71,7 @@ export default function App() {
     suggestions: false,
   });
 
-  // Load data on mount
+  // Загрузка слоёв при старте
   useEffect(() => {
     setStatus('loading_layers');
     Promise.all([
@@ -70,7 +93,7 @@ export default function App() {
       });
   }, []);
 
-  // Sync layer visibility to map
+  // Синхронизация видимости слоёв с картой
   useEffect(() => {
     if (!mapRef.current) return;
     (Object.keys(layerVisibility) as (keyof LayerVisibility)[]).forEach((key) => {
@@ -85,21 +108,101 @@ export default function App() {
   const handleBuildingSelect = useCallback((building: SelectedBuilding) => {
     setSelectedBuilding(building);
     setAnalyzeResult(null);
+    setAnalysisDuration(null);
+    setDataWarning(null);
     mapRef.current?.clearOverlays();
     setLayerVisibility((prev) => ({ ...prev, isochrones: false, suggestions: false }));
     setStatus('building_selected');
+
+    // Асинхронно проверяем покрытие данными
+    api.checkCoverage(building.lat, building.lon)
+      .then(({ covered }) => {
+        if (!covered) {
+          setDataWarning(
+            'Данные в заданной зоне не загружены. Возможно, потребуется время для ' +
+            'подтягивания данных из открытых источников. Нажмите «Выполнить анализ» ' +
+            'для автоматической загрузки.'
+          );
+        }
+      })
+      .catch(() => { /* не блокируем UI при ошибке проверки */ });
   }, []);
+
+  /**
+   * Находит ближайшее здание в радиусе 100 м.
+   * Если найдено — снапится к нему; иначе — использует точные координаты.
+   */
+  const handleManualCoordSelect = useCallback(
+    (lat: number, lon: number) => {
+      let snapped = false;
+      let finalLat = lat;
+      let finalLon = lon;
+
+      if (buildings) {
+        let minDist = Infinity;
+        let nearest: { lat: number; lon: number } | null = null;
+        for (const feat of buildings.features) {
+          const [fLon, fLat] = feat.geometry.coordinates as [number, number];
+          const d = haversineMeters(lat, lon, fLat, fLon);
+          if (d < minDist) {
+            minDist = d;
+            nearest = { lat: fLat, lon: fLon };
+          }
+        }
+        if (nearest && minDist <= 100) {
+          finalLat = nearest.lat;
+          finalLon = nearest.lon;
+          snapped = true;
+        }
+      }
+
+      mapRef.current?.selectCoordinate(finalLon, finalLat);
+
+      handleBuildingSelect({
+        lat: finalLat,
+        lon: finalLon,
+        snapped,
+        feature: {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [finalLon, finalLat] },
+          properties: {},
+        },
+      });
+    },
+    [buildings, handleBuildingSelect],
+  );
 
   const handleAnalyze = useCallback(async () => {
     if (!selectedBuilding) return;
     setStatus('analyzing');
     setError(null);
     setAnalyzeResult(null);
+    setAnalysisDuration(null);
     mapRef.current?.clearOverlays();
     setLayerVisibility((prev) => ({ ...prev, isochrones: false, suggestions: false }));
 
+    analysisStartRef.current = performance.now();
+
     try {
+      // Если данные не покрыты — сначала загружаем из OSM
+      if (dataWarning) {
+        setStatus('fetching_coverage');
+        setError(null);
+        try {
+          await api.fetchCoverage(selectedBuilding.lat, selectedBuilding.lon);
+          setDataWarning(null);
+        } catch {
+          // Продолжаем анализ даже если загрузка OSM не удалась
+        }
+        setStatus('analyzing');
+        analysisStartRef.current = performance.now();
+      }
+
       const result = await api.analyze(selectedBuilding.lat, selectedBuilding.lon);
+
+      const elapsed = (performance.now() - (analysisStartRef.current ?? 0)) / 1000;
+      setAnalysisDuration(elapsed);
+
       setAnalyzeResult(result);
 
       const entries: IsochroneEntry[] = [];
@@ -124,38 +227,51 @@ export default function App() {
     }
   }, [selectedBuilding]);
 
-  // Оптимизация для конкретного типа — не трогает изохроны
-  const handleOptimize = useCallback(async (type: ObjectType) => {
-    if (!selectedBuilding) return;
-    setStatus('optimizing');
-    setError(null);
+  // Клик на карте — всегда снапится к зданию (hitTolerance в MapView)
+  const handleMapBuildingSelect = useCallback(
+    (building: SelectedBuilding) => {
+      handleBuildingSelect({ ...building, snapped: true });
+    },
+    [handleBuildingSelect],
+  );
 
-    try {
-      const result = await api.optimize(selectedBuilding.lat, selectedBuilding.lon, [type]);
+  // Оптимизация для конкретного типа
+  const handleOptimize = useCallback(
+    async (type: ObjectType) => {
+      if (!selectedBuilding) return;
+      setStatus('optimizing');
+      setError(null);
 
-      // Показываем предложения на карте
-      const rec = result.recommendations[type];
-      if (rec) {
-        mapRef.current?.showSuggestions(rec.recommended_sites, rec.fallback_zone);
-        setLayerVisibility((prev) => ({ ...prev, suggestions: true }));
+      try {
+        const result = await api.optimize(selectedBuilding.lat, selectedBuilding.lon, [type]);
+
+        const rec = result.recommendations[type];
+        if (rec) {
+          mapRef.current?.showSuggestions(rec.recommended_sites, rec.fallback_zone);
+          setLayerVisibility((prev) => ({ ...prev, suggestions: true }));
+        }
+
+        setModals((prev) => [
+          ...prev,
+          { id: `${type}-${Date.now()}`, data: result, type },
+        ]);
+
+        setStatus('optimized');
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(`Ошибка оптимизации: ${msg}`);
+        setStatus('error');
       }
-
-      // Добавляем новый независимый отчёт (не закрываем старые)
-      setModals((prev) => [
-        ...prev,
-        { id: `${type}-${Date.now()}`, data: result, type },
-      ]);
-
-      setStatus('optimized');
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(`Ошибка оптимизации: ${msg}`);
-      setStatus('error');
-    }
-  }, [selectedBuilding]);
+    },
+    [selectedBuilding],
+  );
 
   const handleCloseModal = useCallback((id: string) => {
     setModals((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+
+  const handleInputModeChange = useCallback((mode: 'click' | 'coords') => {
+    setInputMode(mode);
   }, []);
 
   return (
@@ -171,6 +287,11 @@ export default function App() {
           selectedBuilding={selectedBuilding}
           status={status}
           analyzeResult={analyzeResult}
+          analysisDuration={analysisDuration}
+          dataWarning={dataWarning}
+          inputMode={inputMode}
+          onInputModeChange={handleInputModeChange}
+          onManualCoordSelect={handleManualCoordSelect}
           onAnalyze={handleAnalyze}
           onOptimize={handleOptimize}
         />
@@ -187,11 +308,10 @@ export default function App() {
           kindergartens={kindergartens}
           schools={schools}
           hospitals={hospitals}
-          onBuildingSelect={handleBuildingSelect}
+          onBuildingSelect={handleMapBuildingSelect}
         />
       </main>
 
-      {/* Независимые плавающие отчёты */}
       {modals.map((modal, index) => (
         <ResultModal
           key={modal.id}
