@@ -77,6 +77,8 @@ export interface IsochroneEntry {
 export interface SelectedBuilding {
   lon: number;
   lat: number;
+  /** true — привязка к ближайшему зданию, false — точные координаты пользователя */
+  snapped: boolean;
   feature: GeoJSONFeature;
 }
 
@@ -88,4 +90,5 @@ export type AppStatus =
   | 'analyzed'
   | 'optimizing'
   | 'optimized'
+  | 'fetching_coverage'
   | 'error';

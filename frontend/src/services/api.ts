@@ -5,7 +5,7 @@ import type {
   ObjectType,
 } from '../types';
 
-const BASE_URL = 'http://localhost:8000';
+const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
@@ -47,6 +47,17 @@ export const api = {
     return request('/optimize', {
       method: 'POST',
       body: JSON.stringify({ lat, lon, failed_types: failedTypes ?? null }),
+    });
+  },
+
+  checkCoverage(lat: number, lon: number): Promise<{ covered: boolean }> {
+    return request(`/coverage/check?lat=${lat}&lon=${lon}`);
+  },
+
+  fetchCoverage(lat: number, lon: number): Promise<{ status: string; message: string }> {
+    return request('/coverage/fetch', {
+      method: 'POST',
+      body: JSON.stringify({ lat, lon }),
     });
   },
 };
