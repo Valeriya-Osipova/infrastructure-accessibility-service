@@ -1,4 +1,4 @@
-import os
+from functools import lru_cache
 from typing import Tuple, Dict, List, Any
 
 import geopandas as gpd
@@ -6,20 +6,29 @@ from shapely.geometry import shape, Point
 from scipy.spatial import KDTree
 import numpy as np
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "..", "data")
 
-RESIDENTIAL_GDF = gpd.read_file(
-    os.path.join(DATA_DIR, "residential_buildings_points.geojson")
-).set_crs(epsg=4326, allow_override=True)
+@lru_cache(maxsize=None)
+def _get_residential_gdf() -> gpd.GeoDataFrame:
+    from repositories.geo_repository import get_buildings
+    return gpd.GeoDataFrame.from_features(
+        get_buildings()["features"], crs="EPSG:4326"
+    )
 
-LOW_DENSITY_GDF = gpd.read_file(
-    os.path.join(DATA_DIR, "final_areas.geojson")
-).set_crs(epsg=4326, allow_override=True)
 
-ROADS_GDF = gpd.read_file(
-    os.path.join(DATA_DIR, "road_big_nodes.geojson")
-).set_crs(epsg=4326, allow_override=True)
+@lru_cache(maxsize=None)
+def _get_low_density_gdf() -> gpd.GeoDataFrame:
+    from repositories.geo_repository import get_low_density_areas
+    return gpd.GeoDataFrame.from_features(
+        get_low_density_areas()["features"], crs="EPSG:4326"
+    )
+
+
+@lru_cache(maxsize=None)
+def _get_road_nodes_gdf() -> gpd.GeoDataFrame:
+    from repositories.geo_repository import get_road_big_nodes
+    return gpd.GeoDataFrame.from_features(
+        get_road_big_nodes()["features"], crs="EPSG:4326"
+    )
 
 
 def find_residential_clusters(
@@ -61,7 +70,7 @@ def find_residential_clusters(
 
 def suggest_kindergarten(iso_walk: dict) -> Dict[str, Any]:
     polygon = shape(iso_walk["geometry"])
-    cluster_centers = find_residential_clusters(RESIDENTIAL_GDF)
+    cluster_centers = find_residential_clusters(_get_residential_gdf())
     recommended_sites = [pt for pt in cluster_centers if polygon.contains(Point(pt))]
 
     criteria_used = []
@@ -84,14 +93,14 @@ def suggest_school(iso_walk: dict, iso_drive: dict) -> Dict[str, Any]:
     recommended_sites = []
     criteria_used = []
 
-    cluster_centers = find_residential_clusters(RESIDENTIAL_GDF)
+    cluster_centers = find_residential_clusters(_get_residential_gdf())
     for pt in cluster_centers:
         if drive_polygon.contains(Point(pt)):
             recommended_sites.append(pt)
     if cluster_centers:
         criteria_used.append("clustered residential buildings within drive isochrone")
 
-    for pt in LOW_DENSITY_GDF.centroid:
+    for pt in _get_low_density_gdf().centroid:
         point = Point(pt.x, pt.y)
         if walk_polygon.contains(point):
             recommended_sites.append((pt.x, pt.y))
@@ -100,7 +109,7 @@ def suggest_school(iso_walk: dict, iso_drive: dict) -> Dict[str, Any]:
             recommended_sites.append((pt.x, pt.y))
             criteria_used.append("low density zone within drive isochrone")
 
-    roads_in_iso = ROADS_GDF[ROADS_GDF.intersects(drive_polygon)]
+    roads_in_iso = _get_road_nodes_gdf()[_get_road_nodes_gdf().intersects(drive_polygon)]
     for geom in roads_in_iso.geometry:
         recommended_sites.append((geom.x, geom.y))
     if not roads_in_iso.empty:
@@ -121,13 +130,13 @@ def suggest_hospital(iso_walk: dict, iso_drive: dict) -> Dict[str, Any]:
     recommended_sites = []
     criteria_used = []
 
-    for pt in LOW_DENSITY_GDF.centroid:
+    for pt in _get_low_density_gdf().centroid:
         point = Point(pt.x, pt.y)
         if drive_polygon.contains(point):
             recommended_sites.append((pt.x, pt.y))
             criteria_used.append("low density zone within 30min drive isochrone")
 
-    roads_in_iso = ROADS_GDF[ROADS_GDF.intersects(drive_polygon)]
+    roads_in_iso = _get_road_nodes_gdf()[_get_road_nodes_gdf().intersects(drive_polygon)]
     if not roads_in_iso.empty:
         for geom in roads_in_iso.geometry:
             recommended_sites.append((geom.x, geom.y))
@@ -173,3 +182,10 @@ def generate_placement_suggestions(
         return suggest_hospital(iso_walk, iso_drive)
     else:
         raise ValueError(f"Unknown object type: {object_type}")
+
+
+def invalidate_cache() -> None:
+    """Сбрасывает кэш GeoDataFrame (вызывается после загрузки новых OSM-данных)."""
+    _get_residential_gdf.cache_clear()
+    _get_low_density_gdf.cache_clear()
+    _get_road_nodes_gdf.cache_clear()

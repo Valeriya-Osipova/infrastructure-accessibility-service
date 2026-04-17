@@ -1,4 +1,4 @@
-import os
+from functools import lru_cache
 from typing import Tuple, Dict, Any
 
 import geopandas as gpd
@@ -6,12 +6,15 @@ from shapely.geometry import Point, shape
 
 from algorithms.isochrones_module import build_isochrone
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "..", "data")
 
-SOCIAL_GDF = gpd.read_file(
-    os.path.join(DATA_DIR, "social_infrastructure_points.geojson")
-).set_crs(epsg=4326, allow_override=True)
+@lru_cache(maxsize=None)
+def _get_social_gdf() -> gpd.GeoDataFrame:
+    """Загружает GeoDataFrame объектов инфраструктуры (с кэшем)."""
+    from repositories.geo_repository import get_infrastructure
+    data = get_infrastructure()
+    return gpd.GeoDataFrame.from_features(
+        data["features"], crs="EPSG:4326"
+    )
 
 
 def _check_in_isochrone(iso_feature: dict, point: Point) -> bool:
@@ -21,15 +24,17 @@ def _check_in_isochrone(iso_feature: dict, point: Point) -> bool:
 
 def _check_kindergarten(coord: Tuple[float, float]) -> Dict[str, Any]:
     iso = build_isochrone(coord, mode="walk", limit=500, limit_type="meters")
-    kids = SOCIAL_GDF[SOCIAL_GDF["amenity"] == "kindergarten"]
+    gdf = _get_social_gdf()
+    kids = gdf[gdf["amenity"] == "kindergarten"]
     kids_points = [Point(x, y) for x, y in zip(kids.geometry.x, kids.geometry.y)]
     ok = any(_check_in_isochrone(iso, pt) for pt in kids_points)
     return {"ok": ok, "norm": "500m walk", "isochrone": iso}
 
 
 def _check_school(coord: Tuple[float, float]) -> Dict[str, Any]:
+    gdf = _get_social_gdf()
     iso_walk = build_isochrone(coord, mode="walk", limit=500, limit_type="meters")
-    schools = SOCIAL_GDF[SOCIAL_GDF["amenity"] == "school"]
+    schools = gdf[gdf["amenity"] == "school"]
     school_points = [Point(x, y) for x, y in zip(schools.geometry.x, schools.geometry.y)]
 
     walk_ok = any(_check_in_isochrone(iso_walk, pt) for pt in school_points)
@@ -54,7 +59,8 @@ def _check_school(coord: Tuple[float, float]) -> Dict[str, Any]:
 
 
 def _check_hospital(coord: Tuple[float, float]) -> Dict[str, Any]:
-    hospitals = SOCIAL_GDF[SOCIAL_GDF["amenity"].isin(["hospital", "clinic"])]
+    gdf = _get_social_gdf()
+    hospitals = gdf[gdf["amenity"].isin(["hospital", "clinic"])]
     hospital_points = [
         Point(x, y) for x, y in zip(hospitals.geometry.x, hospitals.geometry.y)
     ]
@@ -98,3 +104,8 @@ def analyze_accessibility(coord: Tuple[float, float]) -> Dict[str, Any]:
         "school": _check_school(coord),
         "hospital": _check_hospital(coord),
     }
+
+
+def invalidate_cache() -> None:
+    """Сбрасывает кэш GeoDataFrame (вызывается после загрузки новых OSM-данных)."""
+    _get_social_gdf.cache_clear()

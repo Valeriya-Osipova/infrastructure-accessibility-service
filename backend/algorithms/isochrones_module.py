@@ -15,59 +15,110 @@ DATA_DIR = os.path.join(BASE_DIR, "..", "data")
 _GRAPH_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
-def _load_graph(mode: Literal["walk", "drive"]) -> Dict[str, Any]:
-    """
-    Загружает граф, рёбра и пространственные индексы.
-    Данные кэшируются и повторно не читаются с диска.
-    """
-    if mode in _GRAPH_CACHE:
-        return _GRAPH_CACHE[mode]
+# ---------------------------------------------------------------------------
+# Загрузка графа из PostGIS
+# ---------------------------------------------------------------------------
 
+def _load_graph_from_db(mode: Literal["walk", "drive"]) -> Dict[str, Any]:
+    """Строит NetworkX-граф из таблиц узлов и рёбер в PostGIS."""
+    from db.connection import db_connection
+
+    nodes_table = "walk_nodes" if mode == "walk" else "drive_nodes"
+    edges_table = "walk_edges" if mode == "walk" else "drive_edges"
+
+    G = nx.DiGraph()
+
+    with db_connection() as conn:
+        with conn.cursor() as cur:
+            # Узлы
+            cur.execute(f"SELECT node_id, x, y FROM {nodes_table}")
+            for node_id, x, y in cur.fetchall():
+                G.add_node(node_id, x=str(x), y=str(y))
+
+            # Рёбра + геометрия для GeoDataFrame
+            cur.execute(
+                f"SELECT u, v, weight, ST_AsGeoJSON(geom) FROM {edges_table}"
+            )
+            edge_features = []
+            for u, v, weight, geom_json in cur.fetchall():
+                G.add_edge(u, v, weight=float(weight))
+                edge_features.append({
+                    "type": "Feature",
+                    "geometry": json.loads(geom_json),
+                    "properties": {"u": u, "v": v},
+                })
+
+    return G, edge_features
+
+
+# ---------------------------------------------------------------------------
+# Загрузка графа из файлов (fallback)
+# ---------------------------------------------------------------------------
+
+def _load_graph_from_files(mode: Literal["walk", "drive"]) -> Tuple[nx.DiGraph, list]:
+    """Читает граф из локальных graphml + geojson файлов."""
     if mode == "walk":
         graph_path = os.path.join(DATA_DIR, "walk_graph", "walk.graphml")
         edges_path = os.path.join(DATA_DIR, "walk_graph", "walk_edges.geojson")
-        speed_mps = 1.3
-        buffer_size = 100
-    elif mode == "drive":
+    else:
         graph_path = os.path.join(DATA_DIR, "drive_graph", "drive_graph.graphml")
         edges_path = os.path.join(DATA_DIR, "drive_graph", "drive_edges.geojson")
-        speed_mps = None
-        buffer_size = 200 
-    else:
-        raise ValueError("mode must be 'walk' or 'drive'")
 
     G = nx.read_graphml(graph_path)
-
     for _, _, data in G.edges(data=True):
         data["weight"] = float(data["weight"])
 
     with open(edges_path, encoding="utf-8") as f:
         raw = json.load(f)
-    edges_gdf = gpd.GeoDataFrame.from_features(
-        [
-            {
-                "type": "Feature",
-                "geometry": feat["geometry"],
-                "properties": {
-                    "u": str(feat["properties"]["u"]),
-                    "v": str(feat["properties"]["v"]),
-                },
-            }
-            for feat in raw["features"]
-        ],
-        crs="EPSG:4326",
-    )
 
+    edge_features = [
+        {
+            "type": "Feature",
+            "geometry": feat["geometry"],
+            "properties": {
+                "u": str(feat["properties"]["u"]),
+                "v": str(feat["properties"]["v"]),
+            },
+        }
+        for feat in raw["features"]
+    ]
+    return G, edge_features
+
+
+# ---------------------------------------------------------------------------
+# Основной загрузчик с кэшем
+# ---------------------------------------------------------------------------
+
+def _load_graph(mode: Literal["walk", "drive"]) -> Dict[str, Any]:
+    """
+    Загружает граф, рёбра и пространственные индексы.
+    Данные кэшируются и повторно не читаются с диска/БД.
+    """
+    if mode in _GRAPH_CACHE:
+        return _GRAPH_CACHE[mode]
+
+    speed_mps   = 1.3   if mode == "walk" else None
+    buffer_size = 100   if mode == "walk" else 200
+
+    # Попытка загрузки из PostGIS, иначе — из файлов
+    try:
+        from db.connection import is_db_available
+        if is_db_available():
+            G, edge_features = _load_graph_from_db(mode)
+        else:
+            G, edge_features = _load_graph_from_files(mode)
+    except Exception:
+        G, edge_features = _load_graph_from_files(mode)
+
+    edges_gdf = gpd.GeoDataFrame.from_features(edge_features, crs="EPSG:4326")
     edges_gdf["u"] = edges_gdf["u"].astype(str)
     edges_gdf["v"] = edges_gdf["v"].astype(str)
 
     node_ids = []
     coords = []
-
     for node, data in G.nodes(data=True):
         node_ids.append(node)
         coords.append((float(data["x"]), float(data["y"])))
-
     coords = np.array(coords)
     kdtree = KDTree(coords)
 
@@ -77,18 +128,26 @@ def _load_graph(mode: Literal["walk", "drive"]) -> Dict[str, Any]:
     edges_gdf_utm = edges_gdf.to_crs(epsg=utm_epsg)
 
     _GRAPH_CACHE[mode] = {
-        "graph": G,
-        "edges": edges_gdf,
-        "edges_utm": edges_gdf_utm,
-        "kdtree": kdtree,
-        "node_ids": node_ids,
-        "speed_mps": speed_mps,
+        "graph":      G,
+        "edges":      edges_gdf,
+        "edges_utm":  edges_gdf_utm,
+        "kdtree":     kdtree,
+        "node_ids":   node_ids,
+        "speed_mps":  speed_mps,
         "buffer_size": buffer_size,
-        "utm_epsg": utm_epsg,
+        "utm_epsg":   utm_epsg,
     }
-
     return _GRAPH_CACHE[mode]
 
+
+def invalidate_graph_cache() -> None:
+    """Сбрасывает кэш графов (вызывается после загрузки новых OSM-данных)."""
+    _GRAPH_CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
+# Построение изохроны
+# ---------------------------------------------------------------------------
 
 def build_isochrone(
     coord: Tuple[float, float],
@@ -113,13 +172,13 @@ def build_isochrone(
     GeoJSON Feature (тип Polygon)
     """
     data = _load_graph(mode)
-    G = data["graph"]
+    G            = data["graph"]
     edges_gdf_utm = data["edges_utm"]
-    kdtree = data["kdtree"]
-    node_ids = data["node_ids"]
-    speed_mps = data["speed_mps"]
-    buffer_size = data["buffer_size"]
-    utm_epsg = data["utm_epsg"]
+    kdtree       = data["kdtree"]
+    node_ids     = data["node_ids"]
+    speed_mps    = data["speed_mps"]
+    buffer_size  = data["buffer_size"]
+    utm_epsg     = data["utm_epsg"]
 
     if limit_type == "meters":
         if mode == "drive":
@@ -169,11 +228,11 @@ def build_isochrone(
         "type": "Feature",
         "geometry": polygon.__geo_interface__,
         "properties": {
-            "mode": mode,
-            "limit": limit,
-            "limit_type": limit_type,
-            "time_limit_sec": round(time_limit, 2),
-            "source_node": source_nodes[0],
-            "reachable_nodes": len(reachable_nodes),
+            "mode":             mode,
+            "limit":            limit,
+            "limit_type":       limit_type,
+            "time_limit_sec":   round(time_limit, 2),
+            "source_node":      source_nodes[0],
+            "reachable_nodes":  len(reachable_nodes),
         },
     }
