@@ -10,104 +10,125 @@ import { fromLonLat } from 'ol/proj';
 import { Style, Fill, Stroke, Circle, RegularShape } from 'ol/style';
 import { Feature } from 'ol';
 import { Point } from 'ol/geom';
-import type { GeoJSONFeatureCollection, GeoJSONFeature, SelectedBuilding } from '../../types';
+import type {
+  GeoJSONFeatureCollection,
+  GeoJSONFeature,
+  IsochroneEntry,
+  LayerVisibility,
+  SelectedBuilding,
+} from '../../types';
 import 'ol/ol.css';
 import './MapView.css';
 
 export interface MapViewHandle {
-  showIsochrones: (features: GeoJSONFeature[]) => void;
+  showIsochrones: (entries: IsochroneEntry[]) => void;
   showSuggestions: (sites: [number, number][], fallback: GeoJSONFeature) => void;
   clearOverlays: () => void;
-  setLayerVisible: (layer: 'buildings' | 'infrastructure' | 'isochrones' | 'suggestions', visible: boolean) => void;
+  setLayerVisible: (layer: keyof LayerVisibility, visible: boolean) => void;
 }
 
 interface MapViewProps {
   buildings: GeoJSONFeatureCollection | null;
-  infrastructure: GeoJSONFeatureCollection | null;
+  kindergartens: GeoJSONFeatureCollection | null;
+  schools: GeoJSONFeatureCollection | null;
+  hospitals: GeoJSONFeatureCollection | null;
   onBuildingSelect: (building: SelectedBuilding) => void;
 }
 
-const INFRA_COLORS: Record<string, string> = {
+// Цвета слоёв инфраструктуры
+const INFRA_COLOR = {
   kindergarten: '#f59e0b',
   school: '#3b82f6',
   hospital: '#ef4444',
-  clinic: '#ef4444',
+} as const;
+
+// Цвета изохрон по типу объекта
+const ISO_FILL: Record<string, string> = {
+  kindergarten: 'rgba(245, 158, 11, 0.15)',
+  school: 'rgba(59, 130, 246, 0.15)',
+  hospital: 'rgba(239, 68, 68, 0.15)',
+};
+const ISO_STROKE: Record<string, string> = {
+  kindergarten: 'rgba(245, 158, 11, 0.8)',
+  school: 'rgba(59, 130, 246, 0.8)',
+  hospital: 'rgba(239, 68, 68, 0.8)',
 };
 
-const ISO_COLORS: Record<number, string> = {
-  0: 'rgba(59, 130, 246, 0.15)',
-  1: 'rgba(16, 185, 129, 0.15)',
-  2: 'rgba(245, 158, 11, 0.15)',
-  3: 'rgba(239, 68, 68, 0.15)',
-};
-
-const ISO_STROKE_COLORS: Record<number, string> = {
-  0: 'rgba(59, 130, 246, 0.7)',
-  1: 'rgba(16, 185, 129, 0.7)',
-  2: 'rgba(245, 158, 11, 0.7)',
-  3: 'rgba(239, 68, 68, 0.7)',
-};
+function infraStyle(color: string) {
+  return new Style({
+    image: new Circle({
+      radius: 7,
+      fill: new Fill({ color }),
+      stroke: new Stroke({ color: '#fff', width: 1.5 }),
+    }),
+  });
+}
 
 const MapView = forwardRef<MapViewHandle, MapViewProps>(
-  ({ buildings, infrastructure, onBuildingSelect }, ref) => {
+  ({ buildings, kindergartens, schools, hospitals, onBuildingSelect }, ref) => {
     const mapRef = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<Map | null>(null);
 
     const buildingsSource = useRef(new VectorSource());
-    const infraSource = useRef(new VectorSource());
+    const kindergartenSource = useRef(new VectorSource());
+    const schoolSource = useRef(new VectorSource());
+    const hospitalSource = useRef(new VectorSource());
     const isochroneSource = useRef(new VectorSource());
     const suggestionsSource = useRef(new VectorSource());
     const selectedSource = useRef(new VectorSource());
 
     const buildingsLayer = useRef<VectorLayer | null>(null);
-    const infraLayer = useRef<VectorLayer | null>(null);
+    const kindergartenLayer = useRef<VectorLayer | null>(null);
+    const schoolLayer = useRef<VectorLayer | null>(null);
+    const hospitalLayer = useRef<VectorLayer | null>(null);
     const isochroneLayer = useRef<VectorLayer | null>(null);
     const suggestionsLayer = useRef<VectorLayer | null>(null);
 
     useImperativeHandle(ref, () => ({
-      showIsochrones(features: GeoJSONFeature[]) {
+      showIsochrones(entries: IsochroneEntry[]) {
         isochroneSource.current.clear();
         const format = new GeoJSON();
-        features.forEach((feat, i) => {
-          const olFeatures = format.readFeatures(feat, {
+        entries.forEach(({ feature, type, mode }) => {
+          const olFeatures = format.readFeatures(feature, {
             featureProjection: 'EPSG:3857',
           });
+          const isDrive = mode === 'drive';
           olFeatures.forEach((f) => {
             f.setStyle(
               new Style({
-                fill: new Fill({ color: ISO_COLORS[i % 4] }),
-                stroke: new Stroke({ color: ISO_STROKE_COLORS[i % 4], width: 2 }),
+                fill: new Fill({ color: ISO_FILL[type] }),
+                stroke: new Stroke({
+                  color: ISO_STROKE[type],
+                  width: isDrive ? 2 : 2.5,
+                  lineDash: isDrive ? [8, 5] : undefined,
+                }),
               }),
             );
             isochroneSource.current.addFeature(f);
           });
         });
-        isochroneLayer.current?.setVisible(true);
       },
 
       showSuggestions(sites: [number, number][], fallback: GeoJSONFeature) {
         suggestionsSource.current.clear();
 
-        // fallback zone
         const format = new GeoJSON();
-        const fallbackFeatures = format.readFeatures(fallback, {
-          featureProjection: 'EPSG:3857',
-        });
-        fallbackFeatures.forEach((f) => {
+        format.readFeatures(fallback, { featureProjection: 'EPSG:3857' }).forEach((f) => {
           f.setStyle(
             new Style({
               fill: new Fill({ color: 'rgba(168, 85, 247, 0.12)' }),
-              stroke: new Stroke({ color: 'rgba(168, 85, 247, 0.8)', width: 2, lineDash: [6, 4] }),
+              stroke: new Stroke({
+                color: 'rgba(168, 85, 247, 0.8)',
+                width: 2,
+                lineDash: [6, 4],
+              }),
             }),
           );
           suggestionsSource.current.addFeature(f);
         });
 
-        // recommended points
         sites.forEach(([lon, lat]) => {
-          const feat = new Feature({
-            geometry: new Point(fromLonLat([lon, lat])),
-          });
+          const feat = new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
           feat.setStyle(
             new Style({
               image: new RegularShape({
@@ -121,8 +142,6 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
           );
           suggestionsSource.current.addFeature(feat);
         });
-
-        suggestionsLayer.current?.setVisible(true);
       },
 
       clearOverlays() {
@@ -131,13 +150,12 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         selectedSource.current.clear();
       },
 
-      setLayerVisible(
-        layer: 'buildings' | 'infrastructure' | 'isochrones' | 'suggestions',
-        visible: boolean,
-      ) {
-        const map: Record<string, VectorLayer | null> = {
+      setLayerVisible(layer: keyof LayerVisibility, visible: boolean) {
+        const map: Partial<Record<keyof LayerVisibility, VectorLayer | null>> = {
           buildings: buildingsLayer.current,
-          infrastructure: infraLayer.current,
+          kindergarten: kindergartenLayer.current,
+          school: schoolLayer.current,
+          hospital: hospitalLayer.current,
           isochrones: isochroneLayer.current,
           suggestions: suggestionsLayer.current,
         };
@@ -160,29 +178,31 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         }),
       });
 
-      infraLayer.current = new VectorLayer({
-        source: infraSource.current,
-        style: (feature) => {
-          const amenity = feature.get('amenity') as string;
-          const color = INFRA_COLORS[amenity] ?? '#94a3b8';
-          return new Style({
-            image: new Circle({
-              radius: 7,
-              fill: new Fill({ color }),
-              stroke: new Stroke({ color: '#fff', width: 1.5 }),
-            }),
-          });
-        },
+      kindergartenLayer.current = new VectorLayer({
+        source: kindergartenSource.current,
+        style: infraStyle(INFRA_COLOR.kindergarten),
+      });
+
+      schoolLayer.current = new VectorLayer({
+        source: schoolSource.current,
+        style: infraStyle(INFRA_COLOR.school),
+      });
+
+      hospitalLayer.current = new VectorLayer({
+        source: hospitalSource.current,
+        style: infraStyle(INFRA_COLOR.hospital),
       });
 
       isochroneLayer.current = new VectorLayer({
         source: isochroneSource.current,
         zIndex: 5,
+        visible: false, // показываем только после анализа
       });
 
       suggestionsLayer.current = new VectorLayer({
         source: suggestionsSource.current,
         zIndex: 10,
+        visible: false, // показываем только после оптимизации
       });
 
       const selectedLayer = new VectorLayer({
@@ -203,7 +223,9 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
           new TileLayer({ source: new OSM() }),
           isochroneLayer.current,
           buildingsLayer.current,
-          infraLayer.current,
+          kindergartenLayer.current,
+          schoolLayer.current,
+          hospitalLayer.current,
           suggestionsLayer.current,
           selectedLayer,
         ],
@@ -213,13 +235,11 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         }),
       });
 
-      // Click handler
       mapInstance.current.on('click', (event) => {
         const features = mapInstance.current!.getFeaturesAtPixel(event.pixel, {
           layerFilter: (l) => l === buildingsLayer.current,
           hitTolerance: 6,
         });
-
         if (features.length === 0) return;
 
         const feature = features[0];
@@ -234,8 +254,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         ).coordinates;
 
         selectedSource.current.clear();
-        const sel = new Feature({ geometry: new Point(coords) });
-        selectedSource.current.addFeature(sel);
+        selectedSource.current.addFeature(new Feature({ geometry: new Point(coords) }));
 
         onBuildingSelect({
           lon,
@@ -252,26 +271,39 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     // Load buildings
     useEffect(() => {
       if (!buildings) return;
-      const format = new GeoJSON();
-      const features = format.readFeatures(buildings, { featureProjection: 'EPSG:3857' });
+      const features = new GeoJSON().readFeatures(buildings, { featureProjection: 'EPSG:3857' });
       buildingsSource.current.clear();
       buildingsSource.current.addFeatures(features);
-
-      // Auto-zoom to data extent
       const extent = buildingsSource.current.getExtent();
       if (extent[0] !== Infinity) {
         mapInstance.current?.getView().fit(extent, { padding: [60, 60, 60, 60], maxZoom: 15 });
       }
     }, [buildings]);
 
-    // Load infrastructure
+    // Load per-type infrastructure
     useEffect(() => {
-      if (!infrastructure) return;
-      const format = new GeoJSON();
-      const features = format.readFeatures(infrastructure, { featureProjection: 'EPSG:3857' });
-      infraSource.current.clear();
-      infraSource.current.addFeatures(features);
-    }, [infrastructure]);
+      if (!kindergartens) return;
+      kindergartenSource.current.clear();
+      kindergartenSource.current.addFeatures(
+        new GeoJSON().readFeatures(kindergartens, { featureProjection: 'EPSG:3857' }),
+      );
+    }, [kindergartens]);
+
+    useEffect(() => {
+      if (!schools) return;
+      schoolSource.current.clear();
+      schoolSource.current.addFeatures(
+        new GeoJSON().readFeatures(schools, { featureProjection: 'EPSG:3857' }),
+      );
+    }, [schools]);
+
+    useEffect(() => {
+      if (!hospitals) return;
+      hospitalSource.current.clear();
+      hospitalSource.current.addFeatures(
+        new GeoJSON().readFeatures(hospitals, { featureProjection: 'EPSG:3857' }),
+      );
+    }, [hospitals]);
 
     return <div ref={mapRef} className="map-container" />;
   },
