@@ -46,7 +46,7 @@ export default function App() {
 
   const [selectedBuilding, setSelectedBuilding] = useState<SelectedBuilding | null>(null);
   const [analyzeResult, setAnalyzeResult] = useState<AnalyzeResponse | null>(null);
-  const [status, setStatus] = useState<AppStatus>('idle');
+  const [status, setStatus] = useState<AppStatus>('loading_layers');
   const [error, setError] = useState<string | null>(null);
 
   // Независимые плавающие отчёты
@@ -54,6 +54,10 @@ export default function App() {
 
   // Режим выбора точки
   const [inputMode, setInputMode] = useState<'click' | 'coords'>('click');
+
+  // Режим пикинга координат с карты (активируется кнопкой "Указать на карте")
+  const [mapPickMode, setMapPickMode] = useState(false);
+  const [mapPickedCoord, setMapPickedCoord] = useState<{ lat: number; lon: number } | null>(null);
 
   // Время выполнения анализа
   const analysisStartRef = useRef<number | null>(null);
@@ -73,7 +77,6 @@ export default function App() {
 
   // Загрузка слоёв при старте
   useEffect(() => {
-    setStatus('loading_layers');
     Promise.all([
       api.getBuildings(),
       api.getKindergartens(),
@@ -172,6 +175,24 @@ export default function App() {
     [buildings, handleBuildingSelect],
   );
 
+  /** Перезагружает данные всех слоёв с бэкенда (после загрузки OSM) */
+  const refreshLayers = useCallback(async () => {
+    try {
+      const [b, k, s, h] = await Promise.all([
+        api.getBuildings(),
+        api.getKindergartens(),
+        api.getSchools(),
+        api.getHospitals(),
+      ]);
+      setBuildings(b);
+      setKindergartens(k);
+      setSchools(s);
+      setHospitals(h);
+    } catch {
+      // не блокируем UI если обновление слоёв упало
+    }
+  }, []);
+
   const handleAnalyze = useCallback(async () => {
     if (!selectedBuilding) return;
     setStatus('analyzing');
@@ -184,16 +205,25 @@ export default function App() {
     analysisStartRef.current = performance.now();
 
     try {
-      // Если данные не покрыты — сначала загружаем из OSM
+      // Если данные не покрыты — сначала загружаем из OSM (фоновый джоб)
       if (dataWarning) {
         setStatus('fetching_coverage');
         setError(null);
-        try {
-          await api.fetchCoverage(selectedBuilding.lat, selectedBuilding.lon);
-          setDataWarning(null);
-        } catch {
-          // Продолжаем анализ даже если загрузка OSM не удалась
-        }
+        const { job_id } = await api.startCoverageFetch(selectedBuilding.lat, selectedBuilding.lon);
+        // Поллим статус каждые 5 секунд
+        await new Promise<void>((resolve, reject) => {
+          const poll = async () => {
+            try {
+              const job = await api.getCoverageStatus(job_id);
+              if (job.status === 'done') { resolve(); return; }
+              if (job.status === 'error') { reject(new Error(job.error ?? 'Ошибка загрузки OSM')); return; }
+              setTimeout(poll, 5_000);
+            } catch (e) { reject(e); }
+          };
+          poll();
+        });
+        setDataWarning(null);
+        await refreshLayers();
         setStatus('analyzing');
         analysisStartRef.current = performance.now();
       }
@@ -225,7 +255,7 @@ export default function App() {
       setError(`Ошибка анализа: ${msg}`);
       setStatus('error');
     }
-  }, [selectedBuilding]);
+  }, [selectedBuilding, dataWarning, refreshLayers]);
 
   // Клик на карте — всегда снапится к зданию (hitTolerance в MapView)
   const handleMapBuildingSelect = useCallback(
@@ -274,6 +304,22 @@ export default function App() {
     setInputMode(mode);
   }, []);
 
+  /** Активирует режим пикинга: переключает на вкладку координат + включает crosshair на карте */
+  const handleStartMapPick = useCallback(() => {
+    setInputMode('coords');
+    setMapPickMode(true);
+  }, []);
+
+  /** Вызывается MapView когда пользователь кликнул в режиме пикинга */
+  const handleMapCoordinatePick = useCallback(
+    (lat: number, lon: number) => {
+      setMapPickMode(false);
+      setMapPickedCoord({ lat, lon });
+      handleManualCoordSelect(lat, lon);
+    },
+    [handleManualCoordSelect],
+  );
+
   return (
     <div className="app">
       <Sidebar>
@@ -290,8 +336,11 @@ export default function App() {
           analysisDuration={analysisDuration}
           dataWarning={dataWarning}
           inputMode={inputMode}
+          mapPickMode={mapPickMode}
+          mapPickedCoord={mapPickedCoord}
           onInputModeChange={handleInputModeChange}
           onManualCoordSelect={handleManualCoordSelect}
+          onStartMapPick={handleStartMapPick}
           onAnalyze={handleAnalyze}
           onOptimize={handleOptimize}
         />
@@ -309,6 +358,7 @@ export default function App() {
           schools={schools}
           hospitals={hospitals}
           onBuildingSelect={handleMapBuildingSelect}
+          onCoordinatePick={mapPickMode ? handleMapCoordinatePick : null}
         />
       </main>
 

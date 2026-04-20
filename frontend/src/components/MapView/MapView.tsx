@@ -35,6 +35,8 @@ interface MapViewProps {
   schools: GeoJSONFeatureCollection | null;
   hospitals: GeoJSONFeatureCollection | null;
   onBuildingSelect: (building: SelectedBuilding) => void;
+  /** Если передан — любой клик по карте вызывает этот колбэк вместо выбора здания */
+  onCoordinatePick?: ((lat: number, lon: number) => void) | null;
 }
 
 // Цвета слоёв инфраструктуры
@@ -67,10 +69,26 @@ function infraStyle(color: string) {
 }
 
 const MapView = forwardRef<MapViewHandle, MapViewProps>(
-  ({ buildings, kindergartens, schools, hospitals, onBuildingSelect }, ref) => {
+  ({ buildings, kindergartens, schools, hospitals, onBuildingSelect, onCoordinatePick }, ref) => {
     const mapRef = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<Map | null>(null);
     const [cursorCoords, setCursorCoords] = useState<{ lat: number; lon: number } | null>(null);
+
+    // Refs чтобы клик-хэндлер (создаётся один раз) всегда читал актуальные колбэки
+    const onCoordinatePickRef = useRef<((lat: number, lon: number) => void) | null>(null);
+    const onBuildingSelectRef = useRef(onBuildingSelect);
+
+    useEffect(() => {
+      onBuildingSelectRef.current = onBuildingSelect;
+    }, [onBuildingSelect]);
+
+    useEffect(() => {
+      onCoordinatePickRef.current = onCoordinatePick ?? null;
+      // Меняем курсор карты в режиме выбора точки
+      if (mapInstance.current) {
+        mapInstance.current.getViewport().style.cursor = onCoordinatePick ? 'crosshair' : '';
+      }
+    }, [onCoordinatePick]);
 
     const buildingsSource = useRef(new VectorSource());
     const kindergartenSource = useRef(new VectorSource());
@@ -80,6 +98,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const suggestionsSource = useRef(new VectorSource());
     const selectedSource = useRef(new VectorSource());
 
+    const initialFitDone = useRef(false);
     const buildingsLayer = useRef<VectorLayer | null>(null);
     const kindergartenLayer = useRef<VectorLayer | null>(null);
     const schoolLayer = useRef<VectorLayer | null>(null);
@@ -263,6 +282,17 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
       });
 
       mapInstance.current.on('click', (event) => {
+        // Режим выбора произвольной точки — перехватываем любой клик
+        if (onCoordinatePickRef.current) {
+          const coord = mapInstance.current!.getCoordinateFromPixel(event.pixel);
+          if (coord) {
+            const [lon, lat] = toLonLat(coord);
+            onCoordinatePickRef.current(lat, lon);
+          }
+          return;
+        }
+
+        // Обычный режим — только клик по зданию
         const features = mapInstance.current!.getFeaturesAtPixel(event.pixel, {
           layerFilter: (l) => l === buildingsLayer.current,
           hitTolerance: 6,
@@ -283,9 +313,10 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         selectedSource.current.clear();
         selectedSource.current.addFeature(new Feature({ geometry: new Point(coords) }));
 
-        onBuildingSelect({
+        onBuildingSelectRef.current({
           lon,
           lat,
+          snapped: true,
           feature: {
             type: 'Feature',
             geometry: { type: 'Point', coordinates: [lon, lat] },
@@ -301,9 +332,12 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
       const features = new GeoJSON().readFeatures(buildings, { featureProjection: 'EPSG:3857' });
       buildingsSource.current.clear();
       buildingsSource.current.addFeatures(features);
-      const extent = buildingsSource.current.getExtent();
-      if (extent[0] !== Infinity) {
-        mapInstance.current?.getView().fit(extent, { padding: [60, 60, 60, 60], maxZoom: 15 });
+      if (!initialFitDone.current) {
+        const extent = buildingsSource.current.getExtent();
+        if (extent && extent[0] !== Infinity) {
+          mapInstance.current?.getView().fit(extent, { padding: [60, 60, 60, 60], maxZoom: 15 });
+          initialFitDone.current = true;
+        }
       }
     }, [buildings]);
 

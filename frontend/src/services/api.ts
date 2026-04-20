@@ -54,10 +54,18 @@ export const api = {
     return request(`/coverage/check?lat=${lat}&lon=${lon}`);
   },
 
-  fetchCoverage(lat: number, lon: number): Promise<{ status: string; message: string }> {
+  startCoverageFetch(lat: number, lon: number): Promise<{ job_id: string; status: string }> {
     return request('/coverage/fetch', {
       method: 'POST',
       body: JSON.stringify({ lat, lon }),
     });
+  },
+
+  getCoverageStatus(jobId: string): Promise<{
+    status: 'running' | 'done' | 'error';
+    result?: Record<string, unknown>;
+    error?: string;
+  }> {
+    return request(`/coverage/status/${jobId}`);
   },
 };

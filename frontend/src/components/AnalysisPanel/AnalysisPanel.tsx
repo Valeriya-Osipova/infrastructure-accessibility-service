@@ -9,8 +9,11 @@ interface AnalysisPanelProps {
   analysisDuration: number | null;
   dataWarning: string | null;
   inputMode: 'click' | 'coords';
+  mapPickMode: boolean;
+  mapPickedCoord: { lat: number; lon: number } | null;
   onInputModeChange: (mode: 'click' | 'coords') => void;
   onManualCoordSelect: (lat: number, lon: number) => void;
+  onStartMapPick: () => void;
   onAnalyze: () => void;
   onOptimize: (type: ObjectType) => void;
 }
@@ -34,14 +37,27 @@ export default function AnalysisPanel({
   analysisDuration,
   dataWarning,
   inputMode,
+  mapPickMode,
+  mapPickedCoord,
   onInputModeChange,
   onManualCoordSelect,
+  onStartMapPick,
   onAnalyze,
   onOptimize,
 }: AnalysisPanelProps) {
   const [latInput, setLatInput] = useState('');
   const [lonInput, setLonInput] = useState('');
   const [coordError, setCoordError] = useState<string | null>(null);
+
+  // Заполняем поля когда пользователь выбрал точку кликом по карте
+  // (React-Compiler-совместимый derived state — в render, не в effect)
+  const [prevPickedCoord, setPrevPickedCoord] = useState(mapPickedCoord);
+  if (prevPickedCoord !== mapPickedCoord && mapPickedCoord) {
+    setPrevPickedCoord(mapPickedCoord);
+    setLatInput(String(mapPickedCoord.lat));
+    setLonInput(String(mapPickedCoord.lon));
+    setCoordError(null);
+  }
 
   const isAnalyzing = status === 'analyzing' || status === 'fetching_coverage';
   const isOptimizing = status === 'optimizing';
@@ -108,12 +124,26 @@ export default function AnalysisPanel({
             />
           </div>
           {coordError && <p className="analysis-panel__coord-error">{coordError}</p>}
-          <button
-            className="analysis-panel__btn analysis-panel__btn--secondary"
-            onClick={handleCoordSubmit}
-          >
-            Выбрать точку
-          </button>
+          <div className="analysis-panel__coords-actions">
+            <button
+              className="analysis-panel__btn analysis-panel__btn--secondary"
+              onClick={handleCoordSubmit}
+            >
+              Выбрать точку
+            </button>
+            <button
+              className={`analysis-panel__btn analysis-panel__btn--pick${mapPickMode ? ' active' : ''}`}
+              onClick={onStartMapPick}
+              title="Кликните на карте чтобы выбрать точку"
+            >
+              {mapPickMode ? '✕ Отмена' : '📍 С карты'}
+            </button>
+          </div>
+          {mapPickMode && (
+            <p className="analysis-panel__hint analysis-panel__hint--pick">
+              Нажмите на любое место карты
+            </p>
+          )}
         </div>
       )}
 
