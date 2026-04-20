@@ -6,24 +6,75 @@ OSM Auto-Fetch Service
   - граф транспортной сети в радиусе 30 км
   - граф пешеходной сети в радиусе 3 км
 
-Сохраняет данные в PostGIS. Предотвращает повторную загрузку уже покрытых зон
-(coverage_areas). После загрузки инвалидирует все кэши.
+Сохраняет данные в PostGIS. После загрузки инвалидирует все кэши.
 """
 
 import json
 import logging
+import math
+import os
+from functools import lru_cache
 from typing import Tuple
 
 import osmnx as ox
-from shapely.geometry import Point, mapping
-from shapely.ops import unary_union
+from shapely.geometry import Point
+
+# Таймаут запроса и кэш (overpass_url в 2.x — базовый путь без /interpreter)
+ox.settings.requests_timeout = 300
+ox.settings.use_cache = True  # повторные запросы к тому же bbox отдаются из кэша
 
 logger = logging.getLogger(__name__)
 
 # Радиусы загрузки (метры)
-INFRA_RADIUS_M   = 30_000
-DRIVE_RADIUS_M   = 30_000
-WALK_RADIUS_M    =  3_000
+INFRA_RADIUS_M  = 15_000
+DRIVE_RADIUS_M  = 15_000
+WALK_RADIUS_M   =  1_000
+
+# Фильтр для транспортного графа: только дороги регионального значения и выше.
+# Это на порядок меньше данных чем полная drive-сеть, но достаточно для 15-30-мин изохрон.
+DRIVE_CUSTOM_FILTER = (
+    '["highway"~"motorway|motorway_link|trunk|trunk_link'
+    '|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link"]'
+)
+
+# Порог покрытия файловых данных: если ближайшее здание дальше — точка не покрыта
+_FILE_COVERAGE_THRESHOLD_M = 5_000
+
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+@lru_cache(maxsize=1)
+def _get_file_building_coords() -> list:
+    """Возвращает список (lat, lon) жилых зданий из локального GeoJSON (кэшируется)."""
+    path = os.path.join(_BASE_DIR, "data", "residential_buildings_points.geojson")
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return [
+        (feat["geometry"]["coordinates"][1], feat["geometry"]["coordinates"][0])
+        for feat in data["features"]
+        if feat.get("geometry") and feat["geometry"].get("coordinates")
+    ]
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6_371_000
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def _is_covered_by_files(lat: float, lon: float) -> bool:
+    """Проверяет покрытие по файловым данным: ближайшее здание в радиусе 5 км."""
+    try:
+        for blat, blon in _get_file_building_coords():
+            if _haversine_m(lat, lon, blat, blon) <= _FILE_COVERAGE_THRESHOLD_M:
+                return True
+        return False
+    except Exception as e:
+        logger.warning("File coverage check failed: %s", e)
+        return False
 
 # Типы OSM-объектов социальной инфраструктуры
 SOCIAL_AMENITY_TAGS = {
@@ -39,31 +90,24 @@ SOCIAL_AMENITY_TAGS = {
 }
 
 
-def _get_coverage_polygon(lat: float, lon: float, radius_m: float):
-    """Возвращает Shapely-полигон круга покрытия вокруг точки."""
-    point = Point(lon, lat)
-    # Грубое приближение: 1 градус ≈ 111 000 м
-    deg = radius_m / 111_000
-    return point.buffer(deg)
-
-
 def is_point_covered(lat: float, lon: float) -> bool:
     """
     Проверяет, покрыта ли точка загруженными данными пешеходного графа.
 
-    Логика: ищем ближайший узел walk_nodes. Если расстояние > 1 км — данных нет.
+    Логика: ищем ближайший узел walk_nodes.
+    Если расстояние > 1 км — данных нет.
     """
     try:
         from db.connection import db_connection, is_db_available
         if not is_db_available():
-            return True  # без БД считаем, что данные есть (файловый режим)
+            return _is_covered_by_files(lat, lon)
 
         with db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT ST_Distance(
-                        ST_GeogFromText('POINT(' || %s || ' ' || %s || ')'),
+                        ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
                         geom::geography
                     )
                     FROM walk_nodes
@@ -75,73 +119,40 @@ def is_point_covered(lat: float, lon: float) -> bool:
                 row = cur.fetchone()
                 if row is None:
                     return False  # таблица пустая — нет данных
-                distance_m = row[0]
-                return distance_m <= 1_000
+                return float(row[0]) <= 1_000
 
     except Exception as e:
         logger.warning("Coverage check failed: %s", e)
-        return True  # при ошибке — не блокируем анализ
-
-
-def _coverage_area_exists(lat: float, lon: float, radius_m: float) -> bool:
-    """Проверяет, есть ли в coverage_areas зона, которая содержит данную точку+радиус."""
-    try:
-        from db.connection import db_connection
-        polygon = _get_coverage_polygon(lat, lon, radius_m)
-        wkt = polygon.wkt
-        with db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) FROM coverage_areas "
-                    "WHERE ST_Contains(geom, ST_GeomFromText(%s, 4326))",
-                    (f"POINT({lon} {lat})",),
-                )
-                count = cur.fetchone()[0]
-                return count > 0
-    except Exception:
-        return False
+        return _is_covered_by_files(lat, lon)
 
 
 def _save_coverage_area(lat: float, lon: float, radius_m: float, source: str = "osm") -> None:
-    """Сохраняет зону покрытия в coverage_areas (с дедупликацией через ST_Difference)."""
+    """Сохраняет зону покрытия в coverage_areas."""
     from db.connection import db_connection
-    polygon = _get_coverage_polygon(lat, lon, radius_m)
-    wkt = polygon.wkt
-
+    # Грубый круг: 1° ≈ 111 км
+    polygon = Point(lon, lat).buffer(radius_m / 111_000)
     with db_connection() as conn:
         with conn.cursor() as cur:
-            # Сохраняем только ту часть, которой ещё нет в coverage_areas
             cur.execute(
-                """
-                INSERT INTO coverage_areas (source, geom)
-                SELECT %s, ST_Difference(
-                    ST_GeomFromText(%s, 4326),
-                    COALESCE((SELECT ST_Union(geom) FROM coverage_areas), ST_GeomFromText('GEOMETRYCOLLECTION EMPTY', 4326))
-                )
-                WHERE ST_Area(
-                    ST_Difference(
-                        ST_GeomFromText(%s, 4326),
-                        COALESCE((SELECT ST_Union(geom) FROM coverage_areas), ST_GeomFromText('GEOMETRYCOLLECTION EMPTY', 4326))
-                    )
-                ) > 0.000001
-                """,
-                (source, wkt, wkt),
+                "INSERT INTO coverage_areas (source, geom) VALUES (%s, ST_GeomFromText(%s, 4326))",
+                (source, polygon.wkt),
             )
         conn.commit()
 
 
 def _save_infrastructure(conn, features: list) -> int:
-    """Сохраняет объекты инфраструктуры, пропуская уже существующие (по геометрии)."""
+    """Сохраняет объекты инфраструктуры, пропуская геометрически близкие дубли."""
     saved = 0
     with conn.cursor() as cur:
         for feat in features:
             props = feat.get("properties", {})
-            amenity = props.get("amenity")
-            name = props.get("name")
-            geom = feat.get("geometry", {})
+            amenity = props.get("amenity") or ""
+            name    = props.get("name")
+            geom    = feat.get("geometry", {})
             if geom.get("type") != "Point":
                 continue
             lon, lat = geom["coordinates"]
+            wkt = f"POINT({lon} {lat})"
             cur.execute(
                 """
                 INSERT INTO social_infrastructure (amenity, name, geom)
@@ -149,10 +160,10 @@ def _save_infrastructure(conn, features: list) -> int:
                 WHERE NOT EXISTS (
                     SELECT 1 FROM social_infrastructure
                     WHERE ST_DWithin(geom, ST_GeomFromText(%s, 4326), 0.0001)
-                    AND amenity = %s
+                      AND amenity = %s
                 )
                 """,
-                (amenity, name, f"POINT({lon} {lat})", f"POINT({lon} {lat})", amenity),
+                (amenity, name, wkt, wkt, amenity),
             )
             saved += cur.rowcount
     conn.commit()
@@ -172,57 +183,49 @@ def _save_graph_nodes_edges(conn, G, mode: str) -> Tuple[int, int]:
 
     edge_rows = []
     for u, v, data in G.edges(data=True):
+        # travel_time добавляется через ox.add_edge_travel_times() (секунды)
         weight = float(data.get("travel_time", data.get("length", 1.0)))
-        # Попытаемся получить геометрию из атрибута geometry
         geom_attr = data.get("geometry")
-        if geom_attr is not None:
-            coords = list(geom_attr.coords)
-        else:
-            # Берём прямую линию между узлами
-            u_data = G.nodes[u]
-            v_data = G.nodes[v]
-            coords = [(float(u_data["x"]), float(u_data["y"])),
-                      (float(v_data["x"]), float(v_data["y"]))]
-        linestring_wkt = "LINESTRING(" + ", ".join(f"{c[0]} {c[1]}" for c in coords) + ")"
-        edge_rows.append((str(u), str(v), weight, linestring_wkt))
+        try:
+            if geom_attr is not None and hasattr(geom_attr, "coords"):
+                coords = list(geom_attr.coords)
+            else:
+                raise ValueError("no geometry attr")
+        except Exception:
+            # Прямая линия между узлами
+            ux, uy = float(G.nodes[u].get("x", 0)), float(G.nodes[u].get("y", 0))
+            vx, vy = float(G.nodes[v].get("x", 0)), float(G.nodes[v].get("y", 0))
+            coords = [(ux, uy), (vx, vy)]
 
-    nodes_saved = 0
-    edges_saved = 0
+        if len(coords) < 2:
+            continue
+        wkt = "LINESTRING(" + ", ".join(f"{c[0]} {c[1]}" for c in coords) + ")"
+        edge_rows.append((str(u), str(v), weight, wkt))
 
     with conn.cursor() as cur:
         for row in node_rows:
             cur.execute(
-                f"""
-                INSERT INTO {nodes_table} (node_id, x, y, geom)
-                VALUES (%s, %s, %s, ST_GeomFromText(%s, 4326))
-                ON CONFLICT (node_id) DO NOTHING
-                """,
+                f"INSERT INTO {nodes_table} (node_id, x, y, geom) "
+                f"VALUES (%s, %s, %s, ST_GeomFromText(%s, 4326)) ON CONFLICT (node_id) DO NOTHING",
                 row,
             )
-            nodes_saved += cur.rowcount
+        nodes_saved = len(node_rows)
 
-        BATCH = 2000
+        BATCH = 2_000
         for i in range(0, len(edge_rows), BATCH):
             cur.executemany(
                 f"INSERT INTO {edges_table} (u, v, weight, geom) "
                 f"VALUES (%s, %s, %s, ST_GeomFromText(%s, 4326))",
                 edge_rows[i:i + BATCH],
             )
-        edges_saved = len(edge_rows)
-
     conn.commit()
-    return nodes_saved, edges_saved
+    return nodes_saved, len(edge_rows)
 
 
 def fetch_osm_data(lat: float, lon: float) -> dict:
     """
     Загружает данные OSM вокруг заданной точки и сохраняет в БД.
-
-    Это синхронная операция — может занять несколько минут.
-
-    Returns
-    -------
-    dict с информацией о количестве загруженных объектов
+    Синхронная операция — может занять несколько минут.
     """
     from db.connection import db_connection, is_db_available
 
@@ -230,22 +233,19 @@ def fetch_osm_data(lat: float, lon: float) -> dict:
         raise RuntimeError("База данных недоступна. Загрузка OSM-данных невозможна.")
 
     result = {
-        "lat": lat,
-        "lon": lon,
+        "lat": lat, "lon": lon,
         "infrastructure_saved": 0,
-        "walk_nodes_saved": 0,
-        "walk_edges_saved": 0,
-        "drive_nodes_saved": 0,
-        "drive_edges_saved": 0,
+        "walk_nodes_saved": 0, "walk_edges_saved": 0,
+        "drive_nodes_saved": 0, "drive_edges_saved": 0,
+        "errors": [],
     }
 
-    # 1. Социальная инфраструктура (30 км)
-    logger.info("Загрузка объектов инфраструктуры (30 км)...")
+    # 1. Социальная инфраструктура (15 км)
+    logger.info("Загрузка объектов инфраструктуры (%d км)…", INFRA_RADIUS_M // 1000)
     try:
         infra_gdf = ox.features_from_point(
             (lat, lon), tags=SOCIAL_AMENITY_TAGS, dist=INFRA_RADIUS_M
         )
-        # Оставляем только точки (или центроиды полигонов)
         features = []
         for _, row in infra_gdf.iterrows():
             geom = row.geometry
@@ -253,87 +253,74 @@ def fetch_osm_data(lat: float, lon: float) -> dict:
                 continue
             if geom.geom_type != "Point":
                 geom = geom.centroid
-            amenity = row.get("amenity", "")
-            name = row.get("name", None)
+            amenity = row.get("amenity", "") if "amenity" in row.index else ""
+            name    = row.get("name")        if "name"    in row.index else None
+            if hasattr(amenity, "__float__"):
+                amenity = ""
+            if hasattr(name, "__float__"):
+                name = None
             features.append({
-                "geometry": {"type": "Point", "coordinates": [geom.x, geom.y]},
-                "properties": {"amenity": amenity, "name": name},
+                "geometry":   {"type": "Point", "coordinates": [geom.x, geom.y]},
+                "properties": {"amenity": str(amenity), "name": name},
             })
-
         with db_connection() as conn:
             result["infrastructure_saved"] = _save_infrastructure(conn, features)
         logger.info("  Инфраструктура: %d новых объектов", result["infrastructure_saved"])
     except Exception as e:
+        msg = f"infrastructure: {e}"
         logger.warning("Ошибка загрузки инфраструктуры: %s", e)
+        result["errors"].append(msg)
 
-    # 2. Пешеходный граф (3 км)
-    logger.info("Загрузка пешеходного графа (3 км)...")
+    # 2. Пешеходный граф (1.5 км)
+    logger.info("Загрузка пешеходного графа (%d м)…", WALK_RADIUS_M)
     try:
-        G_walk = ox.graph_from_point(
-            (lat, lon),
-            dist=WALK_RADIUS_M,
-            network_type="walk",
-            retain_all=False,
-        )
+        G_walk = ox.graph_from_point((lat, lon), dist=WALK_RADIUS_M, network_type="walk")
         G_walk = ox.add_edge_speeds(G_walk)
         G_walk = ox.add_edge_travel_times(G_walk)
-
         with db_connection() as conn:
             n, e = _save_graph_nodes_edges(conn, G_walk, "walk")
-        result["walk_nodes_saved"] = n
-        result["walk_edges_saved"] = e
-        logger.info("  Пешеходный граф: %d узлов, %d рёбер", n, e)
+        result["walk_nodes_saved"], result["walk_edges_saved"] = n, e
+        logger.info("  Walk: %d узлов, %d рёбер", n, e)
     except Exception as e:
+        msg = f"walk_graph: {e}"
         logger.warning("Ошибка загрузки пешеходного графа: %s", e)
+        result["errors"].append(msg)
 
-    # 3. Транспортный граф (30 км)
-    logger.info("Загрузка транспортного графа (30 км)...")
+    # 3. Транспортный граф (15 км)
+    logger.info("Загрузка транспортного графа (%d км)…", DRIVE_RADIUS_M // 1000)
     try:
         G_drive = ox.graph_from_point(
-            (lat, lon),
-            dist=DRIVE_RADIUS_M,
-            network_type="drive",
-            retain_all=False,
+            (lat, lon), dist=DRIVE_RADIUS_M, custom_filter=DRIVE_CUSTOM_FILTER
         )
         G_drive = ox.add_edge_speeds(G_drive)
         G_drive = ox.add_edge_travel_times(G_drive)
-
         with db_connection() as conn:
             n, e = _save_graph_nodes_edges(conn, G_drive, "drive")
-        result["drive_nodes_saved"] = n
-        result["drive_edges_saved"] = e
-        logger.info("  Транспортный граф: %d узлов, %d рёбер", n, e)
+        result["drive_nodes_saved"], result["drive_edges_saved"] = n, e
+        logger.info("  Drive: %d узлов, %d рёбер", n, e)
     except Exception as e:
+        msg = f"drive_graph: {e}"
         logger.warning("Ошибка загрузки транспортного графа: %s", e)
+        result["errors"].append(msg)
 
-    # 4. Сохраняем зону покрытия
+    # 4. Зона покрытия
     _save_coverage_area(lat, lon, max(INFRA_RADIUS_M, DRIVE_RADIUS_M))
 
-    # 5. Инвалидируем все кэши
+    # 5. Инвалидация кэшей
     _invalidate_all_caches()
-
+    logger.info("Загрузка завершена: %s", result)
     return result
 
 
 def _invalidate_all_caches() -> None:
-    """Сбрасывает кэши репозитория, алгоритмов и графов."""
-    try:
-        from repositories.geo_repository import invalidate_cache
-        invalidate_cache()
-    except Exception:
-        pass
-    try:
-        from algorithms.isochrones_module import invalidate_graph_cache
-        invalidate_graph_cache()
-    except Exception:
-        pass
-    try:
-        from algorithms.accessibility_module import invalidate_cache as inv_acc
-        inv_acc()
-    except Exception:
-        pass
-    try:
-        from algorithms.placement_module import invalidate_cache as inv_place
-        inv_place()
-    except Exception:
-        pass
+    for fn_path in [
+        ("repositories.geo_repository",    "invalidate_cache"),
+        ("algorithms.isochrones_module",    "invalidate_graph_cache"),
+        ("algorithms.accessibility_module", "invalidate_cache"),
+        ("algorithms.placement_module",     "invalidate_cache"),
+    ]:
+        try:
+            module = __import__(fn_path[0], fromlist=[fn_path[1]])
+            getattr(module, fn_path[1])()
+        except Exception:
+            pass

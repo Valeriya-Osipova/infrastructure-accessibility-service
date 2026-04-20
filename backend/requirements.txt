@@ -3,7 +3,7 @@ uvicorn[standard]==0.34.0
 geopandas==0.14.4
 shapely==2.0.6
 networkx==3.3
-osmnx==1.9.4
+osmnx==2.1.0
 numpy==1.26.4
 scipy==1.14.1
 pydantic==2.10.3
