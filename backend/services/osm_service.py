@@ -19,23 +19,29 @@ from typing import Tuple
 import osmnx as ox
 from shapely.geometry import Point
 
-# Таймаут запроса и кэш (overpass_url в 2.x — базовый путь без /interpreter)
-ox.settings.requests_timeout = 300
-ox.settings.use_cache = True  # повторные запросы к тому же bbox отдаются из кэша
+# overpass_url в 2.x — базовый путь без /interpreter
+ox.settings.requests_timeout  = 120   # таймаут одного запроса; быстрее упасть и попробовать fallback
+ox.settings.use_cache         = True  # повторные запросы к тому же bbox из кэша
+ox.settings.overpass_rate_limit = False  # не делать pre-запрос к Overpass за «слотом» (сам по себе может timeout'ить)
+
+_OVERPASS_PRIMARY  = "https://overpass-api.de/api"
+_OVERPASS_FALLBACK = "https://lz4.overpass-api.de/api"
 
 logger = logging.getLogger(__name__)
 
 # Радиусы загрузки (метры)
 INFRA_RADIUS_M  = 15_000
-DRIVE_RADIUS_M  = 15_000
-WALK_RADIUS_M   =  1_000
+DRIVE_RADIUS_M  =  5_000   # только ближайшие дороги для коротких изохрон
+WALK_RADIUS_M   =  2_000
 
-# Фильтр для транспортного графа: только дороги регионального значения и выше.
-# Это на порядок меньше данных чем полная drive-сеть, но достаточно для 15-30-мин изохрон.
-DRIVE_CUSTOM_FILTER = (
+# Фильтр транспортного графа — уровень 1: только магистральные дороги (быстро).
+# Если граф окажется пустым (сельская местность), автоматически применяется уровень 2.
+DRIVE_FILTER_L1 = (
     '["highway"~"motorway|motorway_link|trunk|trunk_link'
     '|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link"]'
 )
+# Уровень 2: все проезжие дороги включая residential/unclassified (полный drive-граф).
+DRIVE_FILTER_L2 = None  # None → network_type='drive' (стандартный фильтр OSMnx)
 
 # Порог покрытия файловых данных: если ближайшее здание дальше — точка не покрыта
 _FILE_COVERAGE_THRESHOLD_M = 5_000
@@ -63,6 +69,29 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = (math.sin(dlat / 2) ** 2
          + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
     return R * 2 * math.asin(math.sqrt(a))
+
+
+def _graph_from_point(lat: float, lon: float, dist: int, **kwargs):
+    """
+    Обёртка вокруг ox.graph_from_point:
+    - при таймауте основного сервера переключается на резервный;
+    - если граф оказался пустым (нет рёбер) — пробрасывает InsufficientResponseError
+      чтобы вызывающий код мог применить более широкий фильтр.
+    """
+    for server in (_OVERPASS_PRIMARY, _OVERPASS_FALLBACK):
+        ox.settings.overpass_url = server
+        try:
+            G = ox.graph_from_point((lat, lon), dist=dist, **kwargs)
+            if G.number_of_edges() == 0:
+                raise ValueError("Graph contains no edges.")
+            return G
+        except Exception as exc:
+            msg = str(exc)
+            if "timed out" in msg.lower() or "timeout" in msg.lower():
+                logger.warning("Overpass %s timeout, пробуем %s…", server, _OVERPASS_FALLBACK)
+                continue
+            raise
+    raise TimeoutError(f"Оба Overpass-сервера не ответили вовремя ({_OVERPASS_PRIMARY}, {_OVERPASS_FALLBACK})")
 
 
 def _is_covered_by_files(lat: float, lon: float) -> bool:
@@ -274,7 +303,7 @@ def fetch_osm_data(lat: float, lon: float) -> dict:
     # 2. Пешеходный граф (1.5 км)
     logger.info("Загрузка пешеходного графа (%d м)…", WALK_RADIUS_M)
     try:
-        G_walk = ox.graph_from_point((lat, lon), dist=WALK_RADIUS_M, network_type="walk")
+        G_walk = _graph_from_point(lat, lon, dist=WALK_RADIUS_M, network_type="walk")
         G_walk = ox.add_edge_speeds(G_walk)
         G_walk = ox.add_edge_travel_times(G_walk)
         with db_connection() as conn:
@@ -289,9 +318,18 @@ def fetch_osm_data(lat: float, lon: float) -> dict:
     # 3. Транспортный граф (15 км)
     logger.info("Загрузка транспортного графа (%d км)…", DRIVE_RADIUS_M // 1000)
     try:
-        G_drive = ox.graph_from_point(
-            (lat, lon), dist=DRIVE_RADIUS_M, custom_filter=DRIVE_CUSTOM_FILTER
-        )
+        # Сначала пробуем только магистральные дороги (быстрее)
+        try:
+            G_drive = _graph_from_point(lat, lon, dist=DRIVE_RADIUS_M, custom_filter=DRIVE_FILTER_L2)
+            logger.info("  Drive: использован фильтр L1 (магистральные дороги)")
+        except ValueError as ve:
+            if "no edges" in str(ve).lower():
+                # В радиусе нет магистралей — загружаем полный drive-граф
+                logger.info("  Drive L1 пустой, пробуем полный drive-граф…")
+                G_drive = _graph_from_point(lat, lon, dist=DRIVE_RADIUS_M, network_type="drive")
+                logger.info("  Drive: использован фильтр L2 (все проезжие дороги)")
+            else:
+                raise
         G_drive = ox.add_edge_speeds(G_drive)
         G_drive = ox.add_edge_travel_times(G_drive)
         with db_connection() as conn:
