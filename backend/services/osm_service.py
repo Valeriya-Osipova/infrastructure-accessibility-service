@@ -118,6 +118,19 @@ SOCIAL_AMENITY_TAGS = {
     ]
 }
 
+# Теги жилых зданий OSM
+BUILDING_TAGS = {
+    "building": [
+        "residential",
+        "house",
+        "apartments",
+        "detached",
+        "terrace",
+        "dormitory",
+        "semidetached_house",
+    ]
+}
+
 
 def is_point_covered(lat: float, lon: float) -> bool:
     """
@@ -199,6 +212,33 @@ def _save_infrastructure(conn, features: list) -> int:
     return saved
 
 
+def _save_buildings(conn, gdf) -> int:
+    """Сохраняет жилые здания из OSM, пропуская дубли в радиусе 10 м."""
+    saved = 0
+    with conn.cursor() as cur:
+        for _, row in gdf.iterrows():
+            geom = row.geometry
+            if geom is None:
+                continue
+            if geom.geom_type != "Point":
+                geom = geom.centroid
+            wkt = f"POINT({geom.x} {geom.y})"
+            cur.execute(
+                """
+                INSERT INTO buildings (geom)
+                SELECT ST_GeomFromText(%s, 4326)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM buildings
+                    WHERE ST_DWithin(geom, ST_GeomFromText(%s, 4326), 0.0001)
+                )
+                """,
+                (wkt, wkt),
+            )
+            saved += cur.rowcount
+    conn.commit()
+    return saved
+
+
 def _save_graph_nodes_edges(conn, G, mode: str) -> Tuple[int, int]:
     """Сохраняет узлы и рёбра графа в соответствующие таблицы."""
     nodes_table = f"{mode}_nodes"
@@ -263,13 +303,28 @@ def fetch_osm_data(lat: float, lon: float) -> dict:
 
     result = {
         "lat": lat, "lon": lon,
+        "buildings_saved": 0,
         "infrastructure_saved": 0,
         "walk_nodes_saved": 0, "walk_edges_saved": 0,
         "drive_nodes_saved": 0, "drive_edges_saved": 0,
         "errors": [],
     }
 
-    # 1. Социальная инфраструктура (15 км)
+    # 1. Жилые здания (15 км) — нужны алгоритму размещения
+    logger.info("Загрузка жилых зданий (%d км)…", INFRA_RADIUS_M // 1000)
+    try:
+        buildings_gdf = ox.features_from_point(
+            (lat, lon), tags=BUILDING_TAGS, dist=INFRA_RADIUS_M
+        )
+        with db_connection() as conn:
+            result["buildings_saved"] = _save_buildings(conn, buildings_gdf)
+        logger.info("  Здания: %d новых объектов", result["buildings_saved"])
+    except Exception as e:
+        msg = f"buildings: {e}"
+        logger.warning("Ошибка загрузки зданий: %s", e)
+        result["errors"].append(msg)
+
+    # 3. Социальная инфраструктура (15 км)
     logger.info("Загрузка объектов инфраструктуры (%d км)…", INFRA_RADIUS_M // 1000)
     try:
         infra_gdf = ox.features_from_point(
@@ -300,7 +355,7 @@ def fetch_osm_data(lat: float, lon: float) -> dict:
         logger.warning("Ошибка загрузки инфраструктуры: %s", e)
         result["errors"].append(msg)
 
-    # 2. Пешеходный граф (1.5 км)
+    # 4. Пешеходный граф
     logger.info("Загрузка пешеходного графа (%d м)…", WALK_RADIUS_M)
     try:
         G_walk = _graph_from_point(lat, lon, dist=WALK_RADIUS_M, network_type="walk")
