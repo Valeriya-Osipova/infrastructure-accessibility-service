@@ -66,31 +66,6 @@ https://github.com/user-attachments/assets/dd85ae55-8aa9-4e9e-b548-6f70356c16e0
 
 ---
 
-## Запуск
-
-```bash
-# Только БД (для локальной разработки)
-docker-compose up db -d
-cd backend && python -m db.init_db
-
-# Бэкенд
-cd backend && uvicorn main:app --reload --port 8000
-
-# Фронтенд
-cd frontend && npm run dev
-```
-
-```bash
-# Всё через Docker
-docker-compose up --build
-docker-compose exec backend python -m db.init_db
-```
-
-Swagger UI: http://localhost:8000/docs  
-Приложение: http://localhost:5173
-
----
-
 ## Подробная документация
 
 См. [ARCHITECTURE.md](ARCHITECTURE.md) — полное описание API, алгоритмов, схемы БД и пользовательского сценария.
