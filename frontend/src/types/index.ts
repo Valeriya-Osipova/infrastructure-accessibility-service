@@ -59,6 +59,7 @@ export interface OptimizeResponse {
 export type ObjectType = 'kindergarten' | 'school' | 'hospital';
 
 export type LayerVisibility = {
+  region: boolean;
   buildings: boolean;
   kindergarten: boolean;
   school: boolean;

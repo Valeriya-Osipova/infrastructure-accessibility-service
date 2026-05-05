@@ -23,6 +23,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getRegions(): Promise<GeoJSONFeatureCollection> {
+    return request('/regions');
+  },
+
   getBuildings(): Promise<GeoJSONFeatureCollection> {
     return request('/buildings');
   },
