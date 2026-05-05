@@ -65,7 +65,11 @@ export type LayerVisibility = {
   hospital: boolean;
   isochrones: boolean;
   suggestions: boolean;
+  toolIsochrone: boolean;
 };
+
+export type IsochroneMode = 'walk' | 'drive';
+export type IsochroneLimitType = 'meters' | 'minutes';
 
 /** Запись об изохроне с привязкой к типу объекта */
 export interface IsochroneEntry {

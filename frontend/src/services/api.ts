@@ -1,8 +1,11 @@
 import type {
   AnalyzeResponse,
   GeoJSONFeatureCollection,
+  GeoJSONFeature,
   OptimizeResponse,
   ObjectType,
+  IsochroneMode,
+  IsochroneLimitType,
 } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -67,5 +70,18 @@ export const api = {
     error?: string;
   }> {
     return request(`/coverage/status/${jobId}`);
+  },
+
+  buildIsochrone(
+    lat: number,
+    lon: number,
+    mode: IsochroneMode,
+    limit: number,
+    limitType: IsochroneLimitType,
+  ): Promise<{ isochrone: GeoJSONFeature }> {
+    return request('/isochrone', {
+      method: 'POST',
+      body: JSON.stringify({ lat, lon, mode, limit, limit_type: limitType }),
+    });
   },
 };
