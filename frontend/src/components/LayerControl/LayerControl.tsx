@@ -46,6 +46,20 @@ export default function LayerControl({
       <h3 className="layer-control__title">Слои</h3>
       <ul className="layer-control__list">
 
+        {/* Граница региона */}
+        <li className="layer-control__item">
+          <label className="layer-control__label">
+            <input
+              type="checkbox"
+              checked={visibility.region}
+              onChange={(e) => onChange('region', e.target.checked)}
+              className="layer-control__checkbox"
+            />
+            <span className="layer-control__dot" style={{ background: '#6366f1' }} />
+            Граница региона
+          </label>
+        </li>
+
         {/* Жилые дома */}
         <li className="layer-control__item">
           <label className="layer-control__label">

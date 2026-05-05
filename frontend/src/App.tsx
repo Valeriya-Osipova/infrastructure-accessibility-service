@@ -46,6 +46,7 @@ export default function App() {
   const [kindergartens, setKindergartens] = useState<GeoJSONFeatureCollection | null>(null);
   const [schools, setSchools] = useState<GeoJSONFeatureCollection | null>(null);
   const [hospitals, setHospitals] = useState<GeoJSONFeatureCollection | null>(null);
+  const [regions, setRegions] = useState<GeoJSONFeatureCollection | null>(null);
 
   const [selectedBuilding, setSelectedBuilding] = useState<SelectedBuilding | null>(null);
   const [analyzeResult, setAnalyzeResult] = useState<AnalyzeResponse | null>(null);
@@ -70,6 +71,7 @@ export default function App() {
   const [dataWarning, setDataWarning] = useState<string | null>(null);
 
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({
+    region: true,
     buildings: true,
     kindergarten: true,
     school: true,
@@ -92,12 +94,14 @@ export default function App() {
       api.getKindergartens(),
       api.getSchools(),
       api.getHospitals(),
+      api.getRegions().catch(() => null),
     ])
-      .then(([b, k, s, h]) => {
+      .then(([b, k, s, h, r]) => {
         setBuildings(b);
         setKindergartens(k);
         setSchools(s);
         setHospitals(h);
+        if (r) setRegions(r);
         setStatus('idle');
       })
       .catch((e) => {
@@ -105,6 +109,12 @@ export default function App() {
         setStatus('error');
       });
   }, []);
+
+  // Загрузка региона на карту
+  useEffect(() => {
+    if (!mapRef.current || !regions) return;
+    mapRef.current.setRegions(regions);
+  }, [regions]);
 
   // Синхронизация видимости слоёв с картой
   useEffect(() => {

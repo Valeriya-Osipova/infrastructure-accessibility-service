@@ -30,6 +30,7 @@ export interface MapViewHandle {
   clearToolIsochrone: () => void;
   showIsoStart: (lon: number, lat: number) => void;
   clearIsoStart: () => void;
+  setRegions: (data: GeoJSONFeatureCollection) => void;
 }
 
 interface MapViewProps {
@@ -93,6 +94,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
       }
     }, [onCoordinatePick]);
 
+    const regionSource = useRef(new VectorSource());
     const buildingsSource = useRef(new VectorSource());
     const kindergartenSource = useRef(new VectorSource());
     const schoolSource = useRef(new VectorSource());
@@ -104,6 +106,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const isoStartSource = useRef(new VectorSource());
 
     const initialFitDone = useRef(false);
+    const regionLayer = useRef<VectorLayer | null>(null);
     const buildingsLayer = useRef<VectorLayer | null>(null);
     const kindergartenLayer = useRef<VectorLayer | null>(null);
     const schoolLayer = useRef<VectorLayer | null>(null);
@@ -181,6 +184,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
 
       setLayerVisible(layer: keyof LayerVisibility, visible: boolean) {
         const map: Partial<Record<keyof LayerVisibility, VectorLayer | null>> = {
+          region: regionLayer.current,
           buildings: buildingsLayer.current,
           kindergarten: kindergartenLayer.current,
           school: schoolLayer.current,
@@ -190,6 +194,13 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
           toolIsochrone: toolIsochroneLayer.current,
         };
         map[layer]?.setVisible(visible);
+      },
+
+      setRegions(data: GeoJSONFeatureCollection) {
+        regionSource.current.clear();
+        const features = new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' });
+        regionSource.current.addFeatures(features);
+        regionLayer.current?.setVisible(true);
       },
 
       showToolIsochrone(feature: GeoJSONFeature, mode: 'walk' | 'drive') {
@@ -239,6 +250,16 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     // Init map once
     useEffect(() => {
       if (!mapRef.current || mapInstance.current) return;
+
+      regionLayer.current = new VectorLayer({
+        source: regionSource.current,
+        zIndex: 1,
+        visible: true,
+        style: new Style({
+          fill: new Fill({ color: 'rgba(99, 102, 241, 0.06)' }),
+          stroke: new Stroke({ color: 'rgba(99, 102, 241, 0.7)', width: 2 }),
+        }),
+      });
 
       buildingsLayer.current = new VectorLayer({
         source: buildingsSource.current,
@@ -333,6 +354,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         target: mapRef.current,
         layers: [
           new TileLayer({ source: new OSM() }),
+          regionLayer.current,
           isochroneLayer.current,
           toolIsochroneLayer.current,
           buildingsLayer.current,
