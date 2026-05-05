@@ -3,6 +3,7 @@ import MapView, { type MapViewHandle } from './components/MapView/MapView';
 import Sidebar from './components/Sidebar/Sidebar';
 import LayerControl from './components/LayerControl/LayerControl';
 import AnalysisPanel from './components/AnalysisPanel/AnalysisPanel';
+import IsochronePanel from './components/IsochronePanel/IsochronePanel';
 import ResultModal from './components/ResultModal/ResultModal';
 import { api } from './services/api';
 import type {
@@ -10,6 +11,8 @@ import type {
   AppStatus,
   GeoJSONFeatureCollection,
   IsochroneEntry,
+  IsochroneLimitType,
+  IsochroneMode,
   LayerVisibility,
   ObjectType,
   OptimizeResponse,
@@ -73,7 +76,14 @@ export default function App() {
     hospital: true,
     isochrones: false,
     suggestions: false,
+    toolIsochrone: false,
   });
+
+  // Инструмент изохрон
+  const [isoPickMode, setIsoPickMode] = useState(false);
+  const [isoPickedCoord, setIsoPickedCoord] = useState<{ lat: number; lon: number } | null>(null);
+  const [isoBuildingIso, setIsoBuildingIso] = useState(false);
+  const [hasToolIsochrone, setHasToolIsochrone] = useState(false);
 
   // Загрузка слоёв при старте
   useEffect(() => {
@@ -310,7 +320,7 @@ export default function App() {
     setMapPickMode(true);
   }, []);
 
-  /** Вызывается MapView когда пользователь кликнул в режиме пикинга */
+  /** Вызывается MapView когда пользователь кликнул в режиме пикинга (анализ) */
   const handleMapCoordinatePick = useCallback(
     (lat: number, lon: number) => {
       setMapPickMode(false);
@@ -320,6 +330,42 @@ export default function App() {
     [handleManualCoordSelect],
   );
 
+  // ── Инструмент изохрон ────────────────────────────────────────────────────
+
+  const handleIsoStartPick = useCallback(() => {
+    setMapPickMode(false); // снимаем режим анализа если был активен
+    setIsoPickMode(true);
+  }, []);
+
+  const handleIsoCoordinatePick = useCallback((lat: number, lon: number) => {
+    setIsoPickMode(false);
+    setIsoPickedCoord({ lat, lon });
+  }, []);
+
+  const handleIsoBuild = useCallback(
+    async (lat: number, lon: number, mode: IsochroneMode, limit: number, limitType: IsochroneLimitType) => {
+      setIsoBuildingIso(true);
+      try {
+        const { isochrone } = await api.buildIsochrone(lat, lon, mode, limit, limitType);
+        mapRef.current?.showToolIsochrone(isochrone, mode);
+        setHasToolIsochrone(true);
+        setLayerVisibility((prev) => ({ ...prev, toolIsochrone: true }));
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(`Ошибка построения изохроны: ${msg}`);
+      } finally {
+        setIsoBuildingIso(false);
+      }
+    },
+    [],
+  );
+
+  const handleIsoClear = useCallback(() => {
+    mapRef.current?.clearToolIsochrone();
+    setHasToolIsochrone(false);
+    setLayerVisibility((prev) => ({ ...prev, toolIsochrone: false }));
+  }, []);
+
   return (
     <div className="app">
       <Sidebar>
@@ -328,6 +374,7 @@ export default function App() {
           onChange={handleLayerChange}
           hasIsochrones={analyzeResult !== null}
           hasSuggestions={modals.length > 0}
+          hasToolIsochrone={hasToolIsochrone}
         />
         <AnalysisPanel
           selectedBuilding={selectedBuilding}
@@ -344,6 +391,15 @@ export default function App() {
           onAnalyze={handleAnalyze}
           onOptimize={handleOptimize}
         />
+        <IsochronePanel
+          isBuilding={isoBuildingIso}
+          pickMode={isoPickMode}
+          pickedCoord={isoPickedCoord}
+          hasIsochrone={hasToolIsochrone}
+          onBuild={handleIsoBuild}
+          onClear={handleIsoClear}
+          onStartPick={handleIsoStartPick}
+        />
         {error && <div className="app__error">{error}</div>}
         {status === 'loading_layers' && (
           <div className="app__loading">Загрузка данных...</div>
@@ -358,7 +414,11 @@ export default function App() {
           schools={schools}
           hospitals={hospitals}
           onBuildingSelect={handleMapBuildingSelect}
-          onCoordinatePick={mapPickMode ? handleMapCoordinatePick : null}
+          onCoordinatePick={
+            mapPickMode ? handleMapCoordinatePick :
+            isoPickMode ? handleIsoCoordinatePick :
+            null
+          }
         />
       </main>
 

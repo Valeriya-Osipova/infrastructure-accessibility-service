@@ -25,8 +25,9 @@ export interface MapViewHandle {
   showSuggestions: (sites: [number, number][], fallback: GeoJSONFeature) => void;
   clearOverlays: () => void;
   setLayerVisible: (layer: keyof LayerVisibility, visible: boolean) => void;
-  /** Показывает маркер на произвольных координатах (ручной ввод без привязки к зданию) */
   selectCoordinate: (lon: number, lat: number) => void;
+  showToolIsochrone: (feature: GeoJSONFeature, mode: 'walk' | 'drive') => void;
+  clearToolIsochrone: () => void;
 }
 
 interface MapViewProps {
@@ -97,6 +98,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const isochroneSource = useRef(new VectorSource());
     const suggestionsSource = useRef(new VectorSource());
     const selectedSource = useRef(new VectorSource());
+    const toolIsochroneSource = useRef(new VectorSource());
 
     const initialFitDone = useRef(false);
     const buildingsLayer = useRef<VectorLayer | null>(null);
@@ -105,6 +107,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const hospitalLayer = useRef<VectorLayer | null>(null);
     const isochroneLayer = useRef<VectorLayer | null>(null);
     const suggestionsLayer = useRef<VectorLayer | null>(null);
+    const toolIsochroneLayer = useRef<VectorLayer | null>(null);
 
     useImperativeHandle(ref, () => ({
       showIsochrones(entries: IsochroneEntry[]) {
@@ -180,8 +183,32 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
           hospital: hospitalLayer.current,
           isochrones: isochroneLayer.current,
           suggestions: suggestionsLayer.current,
+          toolIsochrone: toolIsochroneLayer.current,
         };
         map[layer]?.setVisible(visible);
+      },
+
+      showToolIsochrone(feature: GeoJSONFeature, mode: 'walk' | 'drive') {
+        toolIsochroneSource.current.clear();
+        const format = new GeoJSON();
+        const olFeatures = format.readFeatures(feature, { featureProjection: 'EPSG:3857' });
+        olFeatures.forEach((f) => {
+          f.setStyle(new Style({
+            fill: new Fill({ color: 'rgba(20, 184, 166, 0.15)' }),
+            stroke: new Stroke({
+              color: 'rgba(20, 184, 166, 0.9)',
+              width: 2.5,
+              lineDash: mode === 'drive' ? [8, 5] : undefined,
+            }),
+          }));
+          toolIsochroneSource.current.addFeature(f);
+        });
+        toolIsochroneLayer.current?.setVisible(true);
+      },
+
+      clearToolIsochrone() {
+        toolIsochroneSource.current.clear();
+        toolIsochroneLayer.current?.setVisible(false);
       },
 
       selectCoordinate(lon: number, lat: number) {
@@ -225,7 +252,13 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
       isochroneLayer.current = new VectorLayer({
         source: isochroneSource.current,
         zIndex: 5,
-        visible: false, // показываем только после анализа
+        visible: false,
+      });
+
+      toolIsochroneLayer.current = new VectorLayer({
+        source: toolIsochroneSource.current,
+        zIndex: 6,
+        visible: false,
       });
 
       suggestionsLayer.current = new VectorLayer({
@@ -251,6 +284,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         layers: [
           new TileLayer({ source: new OSM() }),
           isochroneLayer.current,
+          toolIsochroneLayer.current,
           buildingsLayer.current,
           kindergartenLayer.current,
           schoolLayer.current,
