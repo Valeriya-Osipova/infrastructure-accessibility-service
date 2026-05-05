@@ -4,7 +4,7 @@ load_dotenv()  # загружает .env из корня проекта или �
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import buildings, infrastructure, analyze, optimize, isochrone, coverage
+from api.routes import buildings, infrastructure, analyze, optimize, isochrone, coverage, regions
 
 app = FastAPI(
     title="Инфраструктурная доступность",
@@ -26,6 +26,7 @@ app.include_router(analyze.router, tags=["Анализ"])
 app.include_router(optimize.router, tags=["Оптимизация"])
 app.include_router(isochrone.router, tags=["Изохроны"])
 app.include_router(coverage.router)
+app.include_router(regions.router, tags=["Данные"])
 
 
 @app.get("/", tags=["Health"])
