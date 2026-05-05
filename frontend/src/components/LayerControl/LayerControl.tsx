@@ -7,6 +7,7 @@ interface LayerControlProps {
   onChange: (layer: keyof LayerVisibility, value: boolean) => void;
   hasIsochrones: boolean;
   hasSuggestions: boolean;
+  hasToolIsochrone: boolean;
 }
 
 const INFRA_ITEMS: { key: keyof LayerVisibility; label: string; color: string }[] = [
@@ -20,6 +21,7 @@ export default function LayerControl({
   onChange,
   hasIsochrones,
   hasSuggestions,
+  hasToolIsochrone,
 }: LayerControlProps) {
   const [infraExpanded, setInfraExpanded] = useState(true);
 
@@ -129,6 +131,22 @@ export default function LayerControl({
             <span className="layer-control__dot" style={{ background: '#a855f7' }} />
             Предложения
             {!hasSuggestions && <span className="layer-control__hint">нет данных</span>}
+          </label>
+        </li>
+
+        {/* Изохрона инструмента — неактивна пока не построена */}
+        <li className={`layer-control__item${!hasToolIsochrone ? ' layer-control__item--disabled' : ''}`}>
+          <label className="layer-control__label">
+            <input
+              type="checkbox"
+              checked={visibility.toolIsochrone}
+              onChange={(e) => onChange('toolIsochrone', e.target.checked)}
+              className="layer-control__checkbox"
+              disabled={!hasToolIsochrone}
+            />
+            <span className="layer-control__dot" style={{ background: '#14b8a6' }} />
+            Изохрона
+            {!hasToolIsochrone && <span className="layer-control__hint">нет данных</span>}
           </label>
         </li>
 
