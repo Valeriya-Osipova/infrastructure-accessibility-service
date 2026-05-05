@@ -28,6 +28,8 @@ export interface MapViewHandle {
   selectCoordinate: (lon: number, lat: number) => void;
   showToolIsochrone: (feature: GeoJSONFeature, mode: 'walk' | 'drive') => void;
   clearToolIsochrone: () => void;
+  showIsoStart: (lon: number, lat: number) => void;
+  clearIsoStart: () => void;
 }
 
 interface MapViewProps {
@@ -99,6 +101,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const suggestionsSource = useRef(new VectorSource());
     const selectedSource = useRef(new VectorSource());
     const toolIsochroneSource = useRef(new VectorSource());
+    const isoStartSource = useRef(new VectorSource());
 
     const initialFitDone = useRef(false);
     const buildingsLayer = useRef<VectorLayer | null>(null);
@@ -108,6 +111,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const isochroneLayer = useRef<VectorLayer | null>(null);
     const suggestionsLayer = useRef<VectorLayer | null>(null);
     const toolIsochroneLayer = useRef<VectorLayer | null>(null);
+    const isoStartLayer = useRef<VectorLayer | null>(null);
 
     useImperativeHandle(ref, () => ({
       showIsochrones(entries: IsochroneEntry[]) {
@@ -209,6 +213,19 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
       clearToolIsochrone() {
         toolIsochroneSource.current.clear();
         toolIsochroneLayer.current?.setVisible(false);
+        isoStartSource.current.clear();
+      },
+
+      showIsoStart(lon: number, lat: number) {
+        isoStartSource.current.clear();
+        const feat = new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
+        isoStartSource.current.addFeature(feat);
+        isoStartLayer.current?.setVisible(true);
+      },
+
+      clearIsoStart() {
+        isoStartSource.current.clear();
+        isoStartLayer.current?.setVisible(false);
       },
 
       selectCoordinate(lon: number, lat: number) {
@@ -267,16 +284,49 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         visible: false, // показываем только после оптимизации
       });
 
+      // Маркер выбранного здания / точки анализа — оранжевый halo + кружок
       const selectedLayer = new VectorLayer({
         source: selectedSource.current,
         zIndex: 20,
-        style: new Style({
-          image: new Circle({
-            radius: 9,
-            fill: new Fill({ color: '#f97316' }),
-            stroke: new Stroke({ color: '#fff', width: 2 }),
+        style: [
+          new Style({
+            image: new Circle({
+              radius: 18,
+              fill: new Fill({ color: 'rgba(249, 115, 22, 0.18)' }),
+              stroke: new Stroke({ color: 'rgba(249, 115, 22, 0.5)', width: 1.5 }),
+            }),
           }),
-        }),
+          new Style({
+            image: new Circle({
+              radius: 7,
+              fill: new Fill({ color: '#f97316' }),
+              stroke: new Stroke({ color: '#fff', width: 2.5 }),
+            }),
+          }),
+        ],
+      });
+
+      // Маркер начальной точки инструмента изохрон — teal halo + кружок
+      isoStartLayer.current = new VectorLayer({
+        source: isoStartSource.current,
+        zIndex: 21,
+        visible: false,
+        style: [
+          new Style({
+            image: new Circle({
+              radius: 18,
+              fill: new Fill({ color: 'rgba(20, 184, 166, 0.18)' }),
+              stroke: new Stroke({ color: 'rgba(20, 184, 166, 0.5)', width: 1.5 }),
+            }),
+          }),
+          new Style({
+            image: new Circle({
+              radius: 7,
+              fill: new Fill({ color: '#14b8a6' }),
+              stroke: new Stroke({ color: '#fff', width: 2.5 }),
+            }),
+          }),
+        ],
       });
 
       mapInstance.current = new Map({
@@ -291,6 +341,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
           hospitalLayer.current,
           suggestionsLayer.current,
           selectedLayer,
+          isoStartLayer.current,
         ],
         view: new View({
           center: fromLonLat([37.6, 55.75]),

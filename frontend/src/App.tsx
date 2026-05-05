@@ -345,6 +345,7 @@ export default function App() {
   const handleIsoBuild = useCallback(
     async (lat: number, lon: number, mode: IsochroneMode, limit: number, limitType: IsochroneLimitType) => {
       setIsoBuildingIso(true);
+      mapRef.current?.showIsoStart(lon, lat);
       try {
         const { isochrone } = await api.buildIsochrone(lat, lon, mode, limit, limitType);
         mapRef.current?.showToolIsochrone(isochrone, mode);
@@ -353,6 +354,7 @@ export default function App() {
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(`Ошибка построения изохроны: ${msg}`);
+        mapRef.current?.clearIsoStart();
       } finally {
         setIsoBuildingIso(false);
       }
@@ -362,6 +364,7 @@ export default function App() {
 
   const handleIsoClear = useCallback(() => {
     mapRef.current?.clearToolIsochrone();
+    mapRef.current?.clearIsoStart();
     setHasToolIsochrone(false);
     setLayerVisibility((prev) => ({ ...prev, toolIsochrone: false }));
   }, []);
