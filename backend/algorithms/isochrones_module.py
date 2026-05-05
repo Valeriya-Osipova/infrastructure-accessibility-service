@@ -14,6 +14,11 @@ DATA_DIR = os.path.join(BASE_DIR, "..", "data")
 
 _GRAPH_CACHE: Dict[str, Dict[str, Any]] = {}
 
+# Скорость ходьбы: 1.3 м/с = 4.68 км/ч (стандарт для пешеходных изохрон)
+# Используется вместо speed_kph из OSMnx, который даёт автомобильные скорости
+# даже для пешеходного графа, что делает изохроны в ~10 раз больше нужного.
+WALK_SPEED_MPS = 1.3
+
 
 # ---------------------------------------------------------------------------
 # Загрузка графа из PostGIS
@@ -30,23 +35,37 @@ def _load_graph_from_db(mode: Literal["walk", "drive"]) -> Dict[str, Any]:
 
     with db_connection() as conn:
         with conn.cursor() as cur:
-            # Узлы
             cur.execute(f"SELECT node_id, x, y FROM {nodes_table}")
             for node_id, x, y in cur.fetchall():
                 G.add_node(node_id, x=str(x), y=str(y))
 
-            # Рёбра + геометрия для GeoDataFrame
-            cur.execute(
-                f"SELECT u, v, weight, ST_AsGeoJSON(geom) FROM {edges_table}"
-            )
-            edge_features = []
-            for u, v, weight, geom_json in cur.fetchall():
-                G.add_edge(u, v, weight=float(weight))
-                edge_features.append({
-                    "type": "Feature",
-                    "geometry": json.loads(geom_json),
-                    "properties": {"u": u, "v": v},
-                })
+            if mode == "walk":
+                # Вычисляем вес через реальную длину / скорость ходьбы.
+                # OSMnx travel_time использует автомобильные скорости (~50 км/ч),
+                # что делает пешеходные изохроны в ~10 раз больше реальных.
+                cur.execute(
+                    f"SELECT u, v, ST_Length(geom::geography), ST_AsGeoJSON(geom) FROM {edges_table}"
+                )
+                edge_features = []
+                for u, v, length_m, geom_json in cur.fetchall():
+                    G.add_edge(u, v, weight=float(length_m) / WALK_SPEED_MPS)
+                    edge_features.append({
+                        "type": "Feature",
+                        "geometry": json.loads(geom_json),
+                        "properties": {"u": u, "v": v},
+                    })
+            else:
+                cur.execute(
+                    f"SELECT u, v, weight, ST_AsGeoJSON(geom) FROM {edges_table}"
+                )
+                edge_features = []
+                for u, v, weight, geom_json in cur.fetchall():
+                    G.add_edge(u, v, weight=float(weight))
+                    edge_features.append({
+                        "type": "Feature",
+                        "geometry": json.loads(geom_json),
+                        "properties": {"u": u, "v": v},
+                    })
 
     return G, edge_features
 
@@ -66,7 +85,13 @@ def _load_graph_from_files(mode: Literal["walk", "drive"]) -> Tuple[nx.DiGraph, 
 
     G = nx.read_graphml(graph_path)
     for _, _, data in G.edges(data=True):
-        data["weight"] = float(data["weight"])
+        if mode == "walk":
+            # Пересчитываем вес через реальную длину / скорость ходьбы.
+            # travel_time в GraphML от OSMnx вычислен по автомобильным скоростям.
+            length = float(data.get("length", 0))
+            data["weight"] = length / WALK_SPEED_MPS if length > 0 else float(data.get("travel_time", 10.0))
+        else:
+            data["weight"] = float(data.get("travel_time", data.get("length", 1.0)))
 
     with open(edges_path, encoding="utf-8") as f:
         raw = json.load(f)
@@ -97,8 +122,7 @@ def _load_graph(mode: Literal["walk", "drive"]) -> Dict[str, Any]:
     if mode in _GRAPH_CACHE:
         return _GRAPH_CACHE[mode]
 
-    speed_mps   = 1.3   if mode == "walk" else None
-    buffer_size = 100   if mode == "walk" else 200
+    buffer_size = 100 if mode == "walk" else 200
 
     # Попытка загрузки из PostGIS, иначе — из файлов
     try:
@@ -133,7 +157,6 @@ def _load_graph(mode: Literal["walk", "drive"]) -> Dict[str, Any]:
         "edges_utm":  edges_gdf_utm,
         "kdtree":     kdtree,
         "node_ids":   node_ids,
-        "speed_mps":  speed_mps,
         "buffer_size": buffer_size,
         "utm_epsg":   utm_epsg,
     }
@@ -172,20 +195,22 @@ def build_isochrone(
     GeoJSON Feature (тип Polygon)
     """
     data = _load_graph(mode)
-    G            = data["graph"]
+    G             = data["graph"]
     edges_gdf_utm = data["edges_utm"]
-    kdtree       = data["kdtree"]
-    node_ids     = data["node_ids"]
-    speed_mps    = data["speed_mps"]
-    buffer_size  = data["buffer_size"]
-    utm_epsg     = data["utm_epsg"]
+    kdtree        = data["kdtree"]
+    node_ids      = data["node_ids"]
+    buffer_size   = data["buffer_size"]
+    utm_epsg      = data["utm_epsg"]
 
+    # Граф уже загружен с правильными весами:
+    #   walk: weight = length / WALK_SPEED_MPS  (секунды при 1.3 м/с)
+    #   drive: weight = travel_time из OSMnx    (секунды при скорости дороги)
     if limit_type == "meters":
         if mode == "drive":
             raise ValueError("Для drive используйте минуты")
-        time_limit = (limit / speed_mps) * 1.5  # запас 50%
+        time_limit = limit / WALK_SPEED_MPS  # метры → секунды при 1.3 м/с
     elif limit_type == "minutes":
-        time_limit = limit * 60 * 2
+        time_limit = limit * 60
     else:
         raise ValueError("limit_type must be 'meters' or 'minutes'")
 
