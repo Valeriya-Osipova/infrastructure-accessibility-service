@@ -59,7 +59,7 @@ def _load_geojson(filename: str) -> dict | None:
 
 def drop_all(conn: psycopg2.extensions.connection) -> None:
     """Удаляет все таблицы проекта в правильном порядке (с учётом FK)."""
-    print("[0/7] Сброс схемы (--reset)...")
+    print("[0/8] Сброс схемы (--reset)...")
     tables = [
         "walk_edges", "walk_nodes",
         "drive_edges", "drive_nodes",
@@ -67,6 +67,7 @@ def drop_all(conn: psycopg2.extensions.connection) -> None:
         "social_infrastructure",
         "road_big_nodes",
         "coverage_areas",
+        "rf_subjects",
     ]
     with conn.cursor() as cur:
         for tbl in tables:
@@ -76,7 +77,7 @@ def drop_all(conn: psycopg2.extensions.connection) -> None:
 
 
 def create_schema(conn: psycopg2.extensions.connection) -> None:
-    print("[1/7] Создание схемы...")
+    print("[1/8] Создание схемы...")
     with open(SCHEMA_PATH, encoding="utf-8") as f:
         sql = f.read()
     with conn.cursor() as cur:
@@ -85,9 +86,41 @@ def create_schema(conn: psycopg2.extensions.connection) -> None:
     print("      OK")
 
 
+def import_rf_subject(conn: psycopg2.extensions.connection) -> None:
+    """[2/8] Граница субъекта РФ — опционально (файл может отсутствовать)."""
+    print("[2/8] Импорт границы субъекта РФ...")
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM rf_subjects")
+        if cur.fetchone()[0] > 0:
+            print("      Пропуск: таблица уже заполнена")
+            return
+
+    data = _load_geojson("boundary.geojson")
+    if data is None:
+        print(f"      Пропуск: файл boundary.geojson не найден в {DATA_DIR}")
+        return
+
+    rows = []
+    for feat in data["features"]:
+        props = feat.get("properties", {})
+        name = props.get("name") or props.get("display_name") or "Хакасия"
+        osm_id = props.get("osm_id")
+        geom = shape(feat["geometry"])
+        rows.append((name, osm_id, geom.wkt))
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO rf_subjects (name, osm_id, geom) "
+            "VALUES (%s, %s, ST_GeomFromText(%s, 4326))",
+            rows,
+        )
+    conn.commit()
+    print(f"      Загружено: {len(rows)} объект(ов)")
+
+
 def import_final_areas(conn: psycopg2.extensions.connection) -> None:
-    """[2/7] Зоны низкой плотности — опционально (файл может отсутствовать)."""
-    print("[2/7] Импорт зон низкой плотности...")
+    """[3/8] Зоны низкой плотности — опционально (файл может отсутствовать)."""
+    print("[3/8] Импорт зон низкой плотности...")
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM final_areas")
         if cur.fetchone()[0] > 0:
@@ -115,8 +148,8 @@ def import_final_areas(conn: psycopg2.extensions.connection) -> None:
 
 
 def import_buildings(conn: psycopg2.extensions.connection) -> None:
-    """[3/7] Жилые здания — импортируются после final_areas (FK на zone_id)."""
-    print("[3/7] Импорт жилых зданий...")
+    """[4/8] Жилые здания — импортируются после final_areas (FK на zone_id)."""
+    print("[4/8] Импорт жилых зданий...")
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM buildings")
         if cur.fetchone()[0] > 0:
@@ -140,7 +173,7 @@ def import_buildings(conn: psycopg2.extensions.connection) -> None:
 
 
 def import_infrastructure(conn: psycopg2.extensions.connection) -> None:
-    print("[4/7] Импорт объектов инфраструктуры...")
+    print("[5/8] Импорт объектов инфраструктуры...")
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM social_infrastructure")
         if cur.fetchone()[0] > 0:
@@ -165,8 +198,8 @@ def import_infrastructure(conn: psycopg2.extensions.connection) -> None:
 
 
 def import_walk_graph(conn: psycopg2.extensions.connection) -> None:
-    """[5/7] Пешеходный граф: сначала узлы (walk_nodes), затем рёбра (walk_edges → FK)."""
-    print("[5/7] Импорт пешеходного графа...")
+    """[6/8] Пешеходный граф: сначала узлы (walk_nodes), затем рёбра (walk_edges → FK)."""
+    print("[6/8] Импорт пешеходного графа...")
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM walk_nodes")
         if cur.fetchone()[0] > 0:
@@ -214,8 +247,8 @@ def import_walk_graph(conn: psycopg2.extensions.connection) -> None:
 
 
 def import_drive_graph(conn: psycopg2.extensions.connection) -> None:
-    """[6/7] Транспортный граф: сначала узлы (drive_nodes), затем рёбра (drive_edges → FK)."""
-    print("[6/7] Импорт транспортного графа...")
+    """[7/8] Транспортный граф: сначала узлы (drive_nodes), затем рёбра (drive_edges → FK)."""
+    print("[7/8] Импорт транспортного графа...")
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM drive_nodes")
         if cur.fetchone()[0] > 0:
@@ -262,7 +295,7 @@ def import_drive_graph(conn: psycopg2.extensions.connection) -> None:
 
 
 def import_road_nodes(conn: psycopg2.extensions.connection) -> None:
-    print("[7/7] Импорт крупных дорожных узлов...")
+    print("[8/8] Импорт крупных дорожных узлов...")
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM road_big_nodes")
         if cur.fetchone()[0] > 0:
@@ -300,6 +333,7 @@ def main() -> None:
         create_schema(conn)
 
         # Порядок важен: final_areas → buildings (FK), nodes → edges (FK)
+        import_rf_subject(conn)
         import_final_areas(conn)
         import_buildings(conn)
         import_infrastructure(conn)

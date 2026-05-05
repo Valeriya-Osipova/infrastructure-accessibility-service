@@ -94,6 +94,17 @@ CREATE TABLE IF NOT EXISTS road_big_nodes (
 CREATE INDEX IF NOT EXISTS idx_road_nodes_geom ON road_big_nodes USING GIST(geom);
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Субъекты РФ (границы, загруженные из OSM)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS rf_subjects (
+    id      SERIAL PRIMARY KEY,
+    name    VARCHAR(300) NOT NULL,
+    osm_id  BIGINT,
+    geom    GEOMETRY(Geometry, 4326) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rf_subjects_geom ON rf_subjects USING GIST(geom);
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Зоны покрытия загруженными OSM-данными
 -- source: 'osm' — данные получены через OSMnx
 -- ─────────────────────────────────────────────────────────────────────────────
