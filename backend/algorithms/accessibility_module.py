@@ -19,7 +19,9 @@ def _get_social_gdf() -> gpd.GeoDataFrame:
 
 def _check_in_isochrone(iso_feature: dict, point: Point) -> bool:
     polygon = shape(iso_feature["geometry"])
-    return polygon.contains(point)
+    # covers() returns True for interior AND boundary points;
+    # contains() is strict-interior only and misses objects exactly at the limit.
+    return polygon.covers(point)
 
 
 def _check_kindergarten(coord: Tuple[float, float]) -> Dict[str, Any]:
