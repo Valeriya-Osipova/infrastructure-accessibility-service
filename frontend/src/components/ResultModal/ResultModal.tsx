@@ -17,7 +17,7 @@ const LABELS: Record<string, string> = {
 };
 
 const ICONS: Record<string, string> = {
-  kindergarten: '🏫',
+  kindergarten: '🧸',
   school: '📚',
   hospital: '🏥',
 };
@@ -27,6 +27,24 @@ const TYPE_COLOR: Record<string, string> = {
   school: '#3b82f6',
   hospital: '#ef4444',
 };
+
+function downloadGeoJSON(typeName: string, typeLabel: string, sites: [number, number][]) {
+  const geojson = {
+    type: 'FeatureCollection',
+    features: sites.map(([lon, lat], i) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lon, lat] },
+      properties: { type: typeName, label: `${typeLabel} #${i + 1}`, lon, lat },
+    })),
+  };
+  const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `placement_${typeName}.geojson`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function ResultModal({ id, data, type, modalIndex, onClose }: ResultModalProps) {
   const entries = Object.entries(data.recommendations);
@@ -132,6 +150,14 @@ export default function ResultModal({ id, data, type, modalIndex, onClose }: Res
                   </ul>
                 )}
               </div>
+              {result.recommended_sites.length > 0 && (
+                <button
+                  className="result-panel__download-btn"
+                  onClick={() => downloadGeoJSON(t, LABELS[t] ?? t, result.recommended_sites)}
+                >
+                  ⬇ Скачать GeoJSON ({result.recommended_sites.length} точек)
+                </button>
+              )}
             </div>
           ))
         )}

@@ -64,7 +64,9 @@ export type LayerVisibility = {
   kindergarten: boolean;
   school: boolean;
   hospital: boolean;
-  isochrones: boolean;
+  isochrone_kindergarten: boolean;
+  isochrone_school: boolean;
+  isochrone_hospital: boolean;
   suggestions: boolean;
   toolIsochrone: boolean;
 };

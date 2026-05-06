@@ -7,7 +7,7 @@ import VectorSource from 'ol/source/Vector';
 import OSM from 'ol/source/OSM';
 import GeoJSON from 'ol/format/GeoJSON';
 import { fromLonLat, toLonLat } from 'ol/proj';
-import { Style, Fill, Stroke, Circle, RegularShape } from 'ol/style';
+import { Style, Fill, Stroke, Circle, RegularShape, Text } from 'ol/style';
 import { Feature } from 'ol';
 import { Point } from 'ol/geom';
 import type {
@@ -16,6 +16,7 @@ import type {
   IsochroneEntry,
   LayerVisibility,
   NearbyInfraObject,
+  ObjectType,
   SelectedBuilding,
 } from '../../types';
 import 'ol/ol.css';
@@ -23,7 +24,7 @@ import './MapView.css';
 
 export interface MapViewHandle {
   showIsochrones: (entries: IsochroneEntry[]) => void;
-  showSuggestions: (sites: [number, number][], fallback: GeoJSONFeature) => void;
+  showSuggestions: (sites: [number, number][], fallback: GeoJSONFeature, type: ObjectType) => void;
   clearOverlays: () => void;
   setLayerVisible: (layer: keyof LayerVisibility, visible: boolean) => void;
   selectCoordinate: (lon: number, lat: number) => void;
@@ -65,6 +66,50 @@ const ISO_STROKE: Record<string, string> = {
   hospital: 'rgba(239, 68, 68, 0.8)',
 };
 
+function suggestionPointStyle(type: string): Style | Style[] {
+  if (type === 'kindergarten') {
+    return new Style({
+      image: new RegularShape({
+        fill: new Fill({ color: '#f59e0b' }),
+        stroke: new Stroke({ color: '#fff', width: 2 }),
+        points: 5,
+        radius: 13,
+        radius2: 5,
+        angle: 0,
+      }),
+    });
+  }
+  if (type === 'school') {
+    return new Style({
+      image: new RegularShape({
+        fill: new Fill({ color: '#3b82f6' }),
+        stroke: new Stroke({ color: '#fff', width: 2 }),
+        points: 4,
+        radius: 13,
+        angle: Math.PI / 4,
+      }),
+    });
+  }
+  // hospital/FAP — красный круг с «+»
+  return [
+    new Style({
+      image: new Circle({
+        radius: 12,
+        fill: new Fill({ color: '#ef4444' }),
+        stroke: new Stroke({ color: '#fff', width: 2 }),
+      }),
+    }),
+    new Style({
+      text: new Text({
+        text: '+',
+        font: 'bold 18px sans-serif',
+        fill: new Fill({ color: '#fff' }),
+        offsetY: 1,
+      }),
+    }),
+  ];
+}
+
 function infraStyle(color: string) {
   return new Style({
     image: new Circle({
@@ -102,7 +147,9 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const kindergartenSource = useRef(new VectorSource());
     const schoolSource = useRef(new VectorSource());
     const hospitalSource = useRef(new VectorSource());
-    const isochroneSource = useRef(new VectorSource());
+    const kindergartenIsoSource = useRef(new VectorSource());
+    const schoolIsoSource = useRef(new VectorSource());
+    const hospitalIsoSource = useRef(new VectorSource());
     const suggestionsSource = useRef(new VectorSource());
     const selectedSource = useRef(new VectorSource());
     const toolIsochroneSource = useRef(new VectorSource());
@@ -115,7 +162,9 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const kindergartenLayer = useRef<VectorLayer | null>(null);
     const schoolLayer = useRef<VectorLayer | null>(null);
     const hospitalLayer = useRef<VectorLayer | null>(null);
-    const isochroneLayer = useRef<VectorLayer | null>(null);
+    const kindergartenIsoLayer = useRef<VectorLayer | null>(null);
+    const schoolIsoLayer = useRef<VectorLayer | null>(null);
+    const hospitalIsoLayer = useRef<VectorLayer | null>(null);
     const suggestionsLayer = useRef<VectorLayer | null>(null);
     const toolIsochroneLayer = useRef<VectorLayer | null>(null);
     const isoStartLayer = useRef<VectorLayer | null>(null);
@@ -123,68 +172,56 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
 
     useImperativeHandle(ref, () => ({
       showIsochrones(entries: IsochroneEntry[]) {
-        isochroneSource.current.clear();
+        kindergartenIsoSource.current.clear();
+        schoolIsoSource.current.clear();
+        hospitalIsoSource.current.clear();
         const format = new GeoJSON();
         entries.forEach(({ feature, type, mode }) => {
-          const olFeatures = format.readFeatures(feature, {
-            featureProjection: 'EPSG:3857',
-          });
+          const source =
+            type === 'kindergarten' ? kindergartenIsoSource.current
+            : type === 'school' ? schoolIsoSource.current
+            : hospitalIsoSource.current;
+          const olFeatures = format.readFeatures(feature, { featureProjection: 'EPSG:3857' });
           const isDrive = mode === 'drive';
           olFeatures.forEach((f) => {
-            f.setStyle(
-              new Style({
-                fill: new Fill({ color: ISO_FILL[type] }),
-                stroke: new Stroke({
-                  color: ISO_STROKE[type],
-                  width: isDrive ? 2 : 2.5,
-                  lineDash: isDrive ? [8, 5] : undefined,
-                }),
+            f.setStyle(new Style({
+              fill: new Fill({ color: ISO_FILL[type] }),
+              stroke: new Stroke({
+                color: ISO_STROKE[type],
+                width: isDrive ? 2 : 2.5,
+                lineDash: isDrive ? [8, 5] : undefined,
               }),
-            );
-            isochroneSource.current.addFeature(f);
+            }));
+            source.addFeature(f);
           });
         });
       },
 
-      showSuggestions(sites: [number, number][], fallback: GeoJSONFeature) {
+      showSuggestions(sites: [number, number][], fallback: GeoJSONFeature, type: ObjectType) {
         suggestionsSource.current.clear();
 
         const format = new GeoJSON();
         format.readFeatures(fallback, { featureProjection: 'EPSG:3857' }).forEach((f) => {
-          f.setStyle(
-            new Style({
-              fill: new Fill({ color: 'rgba(168, 85, 247, 0.12)' }),
-              stroke: new Stroke({
-                color: 'rgba(168, 85, 247, 0.8)',
-                width: 2,
-                lineDash: [6, 4],
-              }),
-            }),
-          );
+          f.setStyle(new Style({
+            fill: new Fill({ color: 'rgba(168, 85, 247, 0.12)' }),
+            stroke: new Stroke({ color: 'rgba(168, 85, 247, 0.8)', width: 2, lineDash: [6, 4] }),
+          }));
           suggestionsSource.current.addFeature(f);
         });
 
         sites.forEach(([lon, lat]) => {
           const feat = new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
-          feat.setStyle(
-            new Style({
-              image: new RegularShape({
-                fill: new Fill({ color: '#a855f7' }),
-                stroke: new Stroke({ color: '#fff', width: 2 }),
-                points: 4,
-                radius: 8,
-                angle: Math.PI / 4,
-              }),
-            }),
-          );
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          feat.setStyle(suggestionPointStyle(type) as any);
           suggestionsSource.current.addFeature(feat);
         });
       },
 
       clearOverlays() {
-        isochroneSource.current.clear();
+        kindergartenIsoSource.current.clear();
+        schoolIsoSource.current.clear();
+        hospitalIsoSource.current.clear();
         suggestionsSource.current.clear();
-        selectedSource.current.clear();
       },
 
       setLayerVisible(layer: keyof LayerVisibility, visible: boolean) {
@@ -194,7 +231,9 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
           kindergarten: kindergartenLayer.current,
           school: schoolLayer.current,
           hospital: hospitalLayer.current,
-          isochrones: isochroneLayer.current,
+          isochrone_kindergarten: kindergartenIsoLayer.current,
+          isochrone_school: schoolIsoLayer.current,
+          isochrone_hospital: hospitalIsoLayer.current,
           suggestions: suggestionsLayer.current,
           toolIsochrone: toolIsochroneLayer.current,
         };
@@ -304,8 +343,20 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         style: infraStyle(INFRA_COLOR.hospital),
       });
 
-      isochroneLayer.current = new VectorLayer({
-        source: isochroneSource.current,
+      kindergartenIsoLayer.current = new VectorLayer({
+        source: kindergartenIsoSource.current,
+        zIndex: 5,
+        visible: false,
+      });
+
+      schoolIsoLayer.current = new VectorLayer({
+        source: schoolIsoSource.current,
+        zIndex: 5,
+        visible: false,
+      });
+
+      hospitalIsoLayer.current = new VectorLayer({
+        source: hospitalIsoSource.current,
         zIndex: 5,
         visible: false,
       });
@@ -387,7 +438,9 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         layers: [
           new TileLayer({ source: new OSM() }),
           regionLayer.current,
-          isochroneLayer.current,
+          kindergartenIsoLayer.current,
+          schoolIsoLayer.current,
+          hospitalIsoLayer.current,
           toolIsochroneLayer.current,
           buildingsLayer.current,
           kindergartenLayer.current,
