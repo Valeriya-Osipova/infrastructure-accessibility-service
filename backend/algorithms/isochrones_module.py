@@ -1,5 +1,6 @@
 import json
 import os
+from functools import lru_cache
 from typing import Tuple, Literal, Dict, Any
 
 import networkx as nx
@@ -195,6 +196,7 @@ def invalidate_graph_cache() -> None:
 # Построение изохроны
 # ---------------------------------------------------------------------------
 
+@lru_cache(maxsize=512)
 def build_isochrone(
     coord: Tuple[float, float],
     mode: Literal["walk", "drive"],
