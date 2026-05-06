@@ -19,6 +19,26 @@ _GRAPH_CACHE: Dict[str, Dict[str, Any]] = {}
 # даже для пешеходного графа, что делает изохроны в ~10 раз больше нужного.
 WALK_SPEED_MPS = 1.3
 
+# Эффективная скорость автомобиля в городских условиях: 20 км/ч.
+# OSMnx travel_time вычисляется по разрешённой скорости (60 км/ч для вторичных дорог),
+# но реальная скорость в городе — 20 км/ч из-за светофоров и перекрёстков.
+# В сёлах разрешённая скорость ≈ реальной, поэтому OSMnx там точен.
+# Признак городского отрезка: длина < 200 м (плотная уличная сеть).
+DRIVE_CITY_SPEED_MPS = 20.0 / 3.6   # 5.56 м/с
+URBAN_SEGMENT_THRESHOLD_M = 200.0
+
+
+def _drive_edge_weight(length_m: float, travel_time_s: float) -> float:
+    """
+    Возвращает скорректированное время проезда ребра.
+    Короткие рёбра (<200 м) типичны для городской сети с плотными перекрёстками:
+    для них время вычисляется по эффективной скорости 20 км/ч вместо свободного потока.
+    Длинные рёбра (загородные дороги) берутся как есть из OSMnx.
+    """
+    if 0 < length_m < URBAN_SEGMENT_THRESHOLD_M:
+        return max(travel_time_s, length_m / DRIVE_CITY_SPEED_MPS)
+    return travel_time_s
+
 
 # ---------------------------------------------------------------------------
 # Загрузка графа из PostGIS
@@ -55,12 +75,13 @@ def _load_graph_from_db(mode: Literal["walk", "drive"]) -> Dict[str, Any]:
                         "properties": {"u": u, "v": v},
                     })
             else:
+                # Получаем длину ребра через PostGIS для коррекции городских скоростей.
                 cur.execute(
-                    f"SELECT u, v, weight, ST_AsGeoJSON(geom) FROM {edges_table}"
+                    f"SELECT u, v, weight, ST_Length(geom::geography), ST_AsGeoJSON(geom) FROM {edges_table}"
                 )
                 edge_features = []
-                for u, v, weight, geom_json in cur.fetchall():
-                    G.add_edge(u, v, weight=float(weight))
+                for u, v, weight, length_m, geom_json in cur.fetchall():
+                    G.add_edge(u, v, weight=_drive_edge_weight(float(length_m), float(weight)))
                     edge_features.append({
                         "type": "Feature",
                         "geometry": json.loads(geom_json),
@@ -91,7 +112,9 @@ def _load_graph_from_files(mode: Literal["walk", "drive"]) -> Tuple[nx.DiGraph, 
             length = float(data.get("length", 0))
             data["weight"] = length / WALK_SPEED_MPS if length > 0 else float(data.get("travel_time", 10.0))
         else:
-            data["weight"] = float(data.get("travel_time", data.get("length", 1.0)))
+            length = float(data.get("length", 0))
+            travel_time = float(data.get("travel_time", data.get("length", 1.0)))
+            data["weight"] = _drive_edge_weight(length, travel_time)
 
     with open(edges_path, encoding="utf-8") as f:
         raw = json.load(f)
