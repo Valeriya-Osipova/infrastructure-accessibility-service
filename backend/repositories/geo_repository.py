@@ -94,6 +94,23 @@ def _from_db_road_nodes() -> Dict[str, Any]:
     return {"type": "FeatureCollection", "features": features}
 
 
+def _from_db_settlement_centers() -> Dict[str, Any]:
+    from db.connection import db_connection
+    features = []
+    with db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, place_type, ST_AsGeoJSON(geom) FROM settlement_centers"
+            )
+            for name, place_type, geom_json in cur.fetchall():
+                features.append({
+                    "type": "Feature",
+                    "geometry": json.loads(geom_json),
+                    "properties": {"name": name, "place_type": place_type},
+                })
+    return {"type": "FeatureCollection", "features": features}
+
+
 # ---------------------------------------------------------------------------
 # Проверка источника (кэшируется один раз при старте)
 # ---------------------------------------------------------------------------
@@ -164,6 +181,20 @@ def get_road_big_nodes() -> Dict[str, Any]:
     return _load_geojson("road_big_nodes.geojson")
 
 
+@lru_cache(maxsize=None)
+def get_settlement_centers() -> Dict[str, Any]:
+    """Возвращает GeoJSON FeatureCollection центров населённых пунктов."""
+    if _use_db():
+        try:
+            return _from_db_settlement_centers()
+        except Exception:
+            pass  # таблица ещё не создана — падаем на файловый fallback
+    try:
+        return _load_geojson("settlement_centers.geojson")
+    except Exception:
+        return {"type": "FeatureCollection", "features": []}
+
+
 def invalidate_cache() -> None:
     """Сбрасывает кэш репозитория (вызывается после загрузки новых OSM-данных)."""
     get_buildings.cache_clear()
@@ -171,5 +202,6 @@ def invalidate_cache() -> None:
     get_infrastructure_by_type.cache_clear()
     get_low_density_areas.cache_clear()
     get_road_big_nodes.cache_clear()
+    get_settlement_centers.cache_clear()
     global _USE_DB
     _USE_DB = None

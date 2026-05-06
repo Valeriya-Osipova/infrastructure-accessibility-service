@@ -17,6 +17,7 @@
 
 import json
 import os
+import shutil
 import sys
 
 import psycopg2
@@ -60,6 +61,21 @@ def _load_geojson(filename: str) -> dict | None:
 def drop_all(conn: psycopg2.extensions.connection) -> None:
     """Удаляет все таблицы проекта в правильном порядке (с учётом FK)."""
     print("[0/8] Сброс схемы (--reset)...")
+
+    # Закрываем все прочие сессии к БД (например, uvicorn), чтобы не зависнуть на блокировках
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND pid <> pg_backend_pid()
+              AND state IS NOT NULL
+        """)
+        terminated = cur.rowcount
+        if terminated:
+            print(f"      Завершено {terminated} сторонних сессий")
+    conn.commit()
+
     tables = [
         "walk_edges", "walk_nodes",
         "drive_edges", "drive_nodes",
@@ -317,6 +333,36 @@ def import_road_nodes(conn: psycopg2.extensions.connection) -> None:
     print(f"      Загружено: {len(rows)} узлов")
 
 
+def sync_data_files() -> None:
+    """Копирует GeoJSON и графы из DATA_DIR в backend/data/ (файловый fallback)."""
+    if DATA_DIR == os.path.join(BACKEND_DIR, "data"):
+        return  # источник и цель совпадают — копировать не нужно
+
+    dest = os.path.join(BACKEND_DIR, "data")
+    os.makedirs(dest, exist_ok=True)
+
+    files = [
+        "residential_buildings_points.geojson",
+        "social_infrastructure_points.geojson",
+        "final_areas.geojson",
+        "boundary.geojson",
+    ]
+    for fname in files:
+        src = os.path.join(DATA_DIR, fname)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(dest, fname))
+            print(f"      Скопирован: {fname}")
+
+    for subdir in ("walk_graph", "drive_graph"):
+        src_dir = os.path.join(DATA_DIR, subdir)
+        dst_dir = os.path.join(dest, subdir)
+        if os.path.isdir(src_dir):
+            if os.path.exists(dst_dir):
+                shutil.rmtree(dst_dir)
+            shutil.copytree(src_dir, dst_dir)
+            print(f"      Скопирована папка: {subdir}/")
+
+
 def main() -> None:
     reset = "--reset" in sys.argv
 
@@ -324,6 +370,12 @@ def main() -> None:
     print(f"URL:      {DATABASE_URL}")
     print(f"Данные:   {DATA_DIR}")
     print(f"Режим:    {'RESET (сброс + перезагрузка)' if reset else 'обычный (пропуск заполненных таблиц)'}\n")
+
+    # Синхронизируем файлы в backend/data/ чтобы файловый fallback тоже был актуален
+    if DATA_DIR != os.path.join(BACKEND_DIR, "data"):
+        print("[sync] Синхронизация файлов в backend/data/...")
+        sync_data_files()
+        print()
 
     conn = _connect()
     try:
