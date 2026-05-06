@@ -79,7 +79,9 @@ export default function App() {
     kindergarten: true,
     school: true,
     hospital: true,
-    isochrones: false,
+    isochrone_kindergarten: false,
+    isochrone_school: false,
+    isochrone_hospital: false,
     suggestions: false,
     toolIsochrone: false,
   });
@@ -149,7 +151,7 @@ export default function App() {
     setAnalysisDuration(null);
     setDataWarning(null);
     mapRef.current?.clearOverlays();
-    setLayerVisibility((prev) => ({ ...prev, isochrones: false, suggestions: false }));
+    setLayerVisibility((prev) => ({ ...prev, isochrone_kindergarten: false, isochrone_school: false, isochrone_hospital: false, suggestions: false }));
     setStatus('building_selected');
 
     // Асинхронно проверяем покрытие данными
@@ -235,7 +237,7 @@ export default function App() {
     setAnalyzeResult(null);
     setAnalysisDuration(null);
     mapRef.current?.clearOverlays();
-    setLayerVisibility((prev) => ({ ...prev, isochrones: false, suggestions: false }));
+    setLayerVisibility((prev) => ({ ...prev, isochrone_kindergarten: false, isochrone_school: false, isochrone_hospital: false, suggestions: false }));
 
     analysisStartRef.current = performance.now();
 
@@ -283,7 +285,7 @@ export default function App() {
         entries.push({ feature: result.hospital.iso_drive, type: 'hospital', mode: 'drive' });
 
       mapRef.current?.showIsochrones(entries);
-      setLayerVisibility((prev) => ({ ...prev, isochrones: true }));
+      setLayerVisibility((prev) => ({ ...prev, isochrone_kindergarten: true, isochrone_school: true, isochrone_hospital: true }));
       setStatus('analyzed');
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -312,7 +314,7 @@ export default function App() {
 
         const rec = result.recommendations[type];
         if (rec) {
-          mapRef.current?.showSuggestions(rec.recommended_sites, rec.fallback_zone);
+          mapRef.current?.showSuggestions(rec.recommended_sites, rec.fallback_zone, type);
           setLayerVisibility((prev) => ({ ...prev, suggestions: true }));
         }
 

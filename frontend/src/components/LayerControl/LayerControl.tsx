@@ -16,6 +16,12 @@ const INFRA_ITEMS: { key: keyof LayerVisibility; label: string; color: string }[
   { key: 'hospital',     label: 'Больница',     color: '#ef4444' },
 ];
 
+const ISOCHRONE_ITEMS: { key: keyof LayerVisibility; label: string; color: string }[] = [
+  { key: 'isochrone_kindergarten', label: 'Дет. сад', color: '#f59e0b' },
+  { key: 'isochrone_school',       label: 'Школа',    color: '#3b82f6' },
+  { key: 'isochrone_hospital',     label: 'ФАП',      color: '#ef4444' },
+];
+
 export default function LayerControl({
   visibility,
   onChange,
@@ -24,6 +30,7 @@ export default function LayerControl({
   hasToolIsochrone,
 }: LayerControlProps) {
   const [infraExpanded, setInfraExpanded] = useState(true);
+  const [isoExpanded, setIsoExpanded] = useState(true);
 
   // Состояние родительского чекбокса «Инфраструктура»
   const infraAll  = INFRA_ITEMS.every(({ key }) => visibility[key]);
@@ -39,6 +46,22 @@ export default function LayerControl({
 
   const handleInfraAll = (checked: boolean) => {
     INFRA_ITEMS.forEach(({ key }) => onChange(key, checked));
+  };
+
+  // Состояние родительского чекбокса «Зоны доступности»
+  const isoAll  = ISOCHRONE_ITEMS.every(({ key }) => visibility[key]);
+  const isoNone = ISOCHRONE_ITEMS.every(({ key }) => !visibility[key]);
+  const isoMixed = !isoAll && !isoNone;
+
+  const isoCheckRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (isoCheckRef.current) {
+      isoCheckRef.current.indeterminate = isoMixed;
+    }
+  }, [isoMixed]);
+
+  const handleIsoAll = (checked: boolean) => {
+    ISOCHRONE_ITEMS.forEach(({ key }) => onChange(key, checked));
   };
 
   return (
@@ -116,20 +139,52 @@ export default function LayerControl({
           )}
         </li>
 
-        {/* Зоны доступности — неактивны до анализа */}
-        <li className={`layer-control__item${!hasIsochrones ? ' layer-control__item--disabled' : ''}`}>
-          <label className="layer-control__label">
-            <input
-              type="checkbox"
-              checked={visibility.isochrones}
-              onChange={(e) => onChange('isochrones', e.target.checked)}
-              className="layer-control__checkbox"
+        {/* Группа «Зоны доступности» — неактивна до анализа */}
+        <li className={`layer-control__group${!hasIsochrones ? ' layer-control__item--disabled' : ''}`}>
+          <div className="layer-control__group-header">
+            <button
+              className="layer-control__expand"
+              onClick={() => { if (hasIsochrones) setIsoExpanded((v) => !v); }}
+              aria-label={isoExpanded ? 'Свернуть' : 'Развернуть'}
               disabled={!hasIsochrones}
-            />
-            <span className="layer-control__dot layer-control__dot--zone" />
-            Зоны доступности
-            {!hasIsochrones && <span className="layer-control__hint">нет данных</span>}
-          </label>
+            >
+              {isoExpanded ? '▾' : '▸'}
+            </button>
+            <label className="layer-control__label">
+              <input
+                ref={isoCheckRef}
+                type="checkbox"
+                checked={isoAll}
+                onChange={(e) => handleIsoAll(e.target.checked)}
+                className="layer-control__checkbox"
+                disabled={!hasIsochrones}
+              />
+              Зоны доступности
+              {!hasIsochrones && <span className="layer-control__hint">нет данных</span>}
+            </label>
+          </div>
+
+          {isoExpanded && hasIsochrones && (
+            <ul className="layer-control__sublist">
+              {ISOCHRONE_ITEMS.map(({ key, label, color }) => (
+                <li key={key} className="layer-control__item">
+                  <label className="layer-control__label">
+                    <input
+                      type="checkbox"
+                      checked={visibility[key]}
+                      onChange={(e) => onChange(key, e.target.checked)}
+                      className="layer-control__checkbox"
+                    />
+                    <span
+                      className="layer-control__dot"
+                      style={{ background: 'transparent', border: `2px dashed ${color}`, boxSizing: 'border-box' }}
+                    />
+                    {label}
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
         </li>
 
         {/* Предложения — неактивны до оптимизации */}
