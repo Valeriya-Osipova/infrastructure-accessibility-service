@@ -59,6 +59,7 @@ def run_placement_suggestions(
             object_type=obj_type,
             iso_walk=iso_walk,
             iso_drive=iso_drive,
+            origin=coord,
         )
 
     return {"recommendations": recommendations}
