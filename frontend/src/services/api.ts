@@ -6,6 +6,8 @@ import type {
   ObjectType,
   IsochroneMode,
   IsochroneLimitType,
+  InfraAmenity,
+  NearbyInfraObject,
 } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -87,5 +89,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ lat, lon, mode, limit, limit_type: limitType }),
     });
+  },
+
+  addInfrastructure(lat: number, lon: number, amenity: InfraAmenity): Promise<{ id: number; amenity: string; lat: number; lon: number }> {
+    return request('/infrastructure/add', { method: 'POST', body: JSON.stringify({ lat, lon, amenity }) });
+  },
+
+  getNearbyInfrastructure(lat: number, lon: number, radiusM = 100): Promise<{ objects: NearbyInfraObject[] }> {
+    return request(`/infrastructure/nearby?lat=${lat}&lon=${lon}&radius_m=${radiusM}`);
+  },
+
+  deleteInfrastructure(ids: number[]): Promise<{ deleted: number }> {
+    return request('/infrastructure/delete', { method: 'DELETE', body: JSON.stringify({ ids }) });
   },
 };

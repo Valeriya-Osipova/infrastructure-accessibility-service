@@ -97,3 +97,13 @@ export type AppStatus =
   | 'optimized'
   | 'fetching_coverage'
   | 'error';
+
+export type InfraAmenity = 'kindergarten' | 'school' | 'hospital' | 'clinic';
+
+export interface NearbyInfraObject {
+  id: number;
+  amenity: string;
+  name: string;
+  lat: number;
+  lon: number;
+}
