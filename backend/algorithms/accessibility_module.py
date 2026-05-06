@@ -1,4 +1,3 @@
-from functools import lru_cache
 from typing import Tuple, Dict, Any
 
 import geopandas as gpd
@@ -7,7 +6,6 @@ from shapely.geometry import Point, shape
 from algorithms.isochrones_module import build_isochrone
 
 
-@lru_cache(maxsize=None)
 def _get_social_gdf() -> gpd.GeoDataFrame:
     """Загружает GeoDataFrame объектов инфраструктуры (с кэшем)."""
     from repositories.geo_repository import get_infrastructure
