@@ -4,16 +4,19 @@ import Sidebar from './components/Sidebar/Sidebar';
 import LayerControl from './components/LayerControl/LayerControl';
 import AnalysisPanel from './components/AnalysisPanel/AnalysisPanel';
 import IsochronePanel from './components/IsochronePanel/IsochronePanel';
+import InfraEditPanel from './components/InfraEditPanel/InfraEditPanel';
 import ResultModal from './components/ResultModal/ResultModal';
 import { api } from './services/api';
 import type {
   AnalyzeResponse,
   AppStatus,
   GeoJSONFeatureCollection,
+  InfraAmenity,
   IsochroneEntry,
   IsochroneLimitType,
   IsochroneMode,
   LayerVisibility,
+  NearbyInfraObject,
   ObjectType,
   OptimizeResponse,
   SelectedBuilding,
@@ -86,6 +89,18 @@ export default function App() {
   const [isoPickedCoord, setIsoPickedCoord] = useState<{ lat: number; lon: number } | null>(null);
   const [isoBuildingIso, setIsoBuildingIso] = useState(false);
   const [hasToolIsochrone, setHasToolIsochrone] = useState(false);
+
+  // Редактирование инфраструктуры
+  const [infraAddPickMode, setInfraAddPickMode] = useState(false);
+  const [infraAddPickedCoord, setInfraAddPickedCoord] = useState<{ lat: number; lon: number } | null>(null);
+  const [infraDeletePickMode, setInfraDeletePickMode] = useState(false);
+  const [infraNearbyObjects, setInfraNearbyObjects] = useState<NearbyInfraObject[] | null>(null);
+  const [isSearchingNearby, setIsSearchingNearby] = useState(false);
+  const [isAddingInfra, setIsAddingInfra] = useState(false);
+  const [isDeletingInfra, setIsDeletingInfra] = useState(false);
+
+  const infraAddPickModeRef = useRef(false);
+  const infraDeletePickModeRef = useRef(false);
 
   // Загрузка слоёв при старте
   useEffect(() => {
@@ -379,6 +394,95 @@ export default function App() {
     setLayerVisibility((prev) => ({ ...prev, toolIsochrone: false }));
   }, []);
 
+  // ── Редактирование инфраструктуры ────────────────────────────────────────
+
+  // Синхронизируем refs с state чтобы onCoordinatePick не захватил устаревшее значение
+  useEffect(() => { infraAddPickModeRef.current = infraAddPickMode; }, [infraAddPickMode]);
+  useEffect(() => { infraDeletePickModeRef.current = infraDeletePickMode; }, [infraDeletePickMode]);
+
+  // Обновляем инфра-слои после добавления/удаления
+  const refreshInfraLayers = useCallback(async () => {
+    try {
+      const [k, s, h] = await Promise.all([
+        api.getKindergartens(),
+        api.getSchools(),
+        api.getHospitals(),
+      ]);
+      setKindergartens(k);
+      setSchools(s);
+      setHospitals(h);
+    } catch { /* не блокируем UI */ }
+  }, []);
+
+  // Подсвечиваем найденные объекты на карте
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (infraNearbyObjects && infraNearbyObjects.length > 0) {
+      mapRef.current.highlightInfraObjects(infraNearbyObjects);
+    } else {
+      mapRef.current.clearInfraHighlight();
+    }
+  }, [infraNearbyObjects]);
+
+  const handleInfraStartAddPick = useCallback(() => {
+    setInfraDeletePickMode(false);
+    setInfraAddPickMode(true);
+  }, []);
+
+  const handleInfraAddCoordPick = useCallback((lat: number, lon: number) => {
+    setInfraAddPickMode(false);
+    setInfraAddPickedCoord({ lat, lon });
+  }, []);
+
+  const handleInfraStartDeletePick = useCallback(() => {
+    setInfraAddPickMode(false);
+    setInfraNearbyObjects(null);
+    mapRef.current?.clearInfraHighlight();
+    setInfraDeletePickMode(true);
+  }, []);
+
+  const handleInfraDeleteCoordPick = useCallback(async (lat: number, lon: number) => {
+    setInfraDeletePickMode(false);
+    setIsSearchingNearby(true);
+    setInfraNearbyObjects(null);
+    try {
+      const { objects } = await api.getNearbyInfrastructure(lat, lon, 100);
+      setInfraNearbyObjects(objects);
+    } catch {
+      setInfraNearbyObjects([]);
+    } finally {
+      setIsSearchingNearby(false);
+    }
+  }, []);
+
+  const handleInfraCancelDelete = useCallback(() => {
+    setInfraDeletePickMode(false);
+    setInfraNearbyObjects(null);
+    mapRef.current?.clearInfraHighlight();
+  }, []);
+
+  const handleInfraAdd = useCallback(async (lat: number, lon: number, amenity: InfraAmenity) => {
+    setIsAddingInfra(true);
+    try {
+      await api.addInfrastructure(lat, lon, amenity);
+      await refreshInfraLayers();
+    } finally {
+      setIsAddingInfra(false);
+    }
+  }, [refreshInfraLayers]);
+
+  const handleInfraDelete = useCallback(async (ids: number[]) => {
+    setIsDeletingInfra(true);
+    try {
+      await api.deleteInfrastructure(ids);
+      await refreshInfraLayers();
+      setInfraNearbyObjects(null);
+      mapRef.current?.clearInfraHighlight();
+    } finally {
+      setIsDeletingInfra(false);
+    }
+  }, [refreshInfraLayers]);
+
   return (
     <div className="app">
       <Sidebar>
@@ -413,6 +517,20 @@ export default function App() {
           onClear={handleIsoClear}
           onStartPick={handleIsoStartPick}
         />
+        <InfraEditPanel
+          addPickMode={infraAddPickMode}
+          addPickedCoord={infraAddPickedCoord}
+          isAdding={isAddingInfra}
+          deletePickMode={infraDeletePickMode}
+          nearbyObjects={infraNearbyObjects}
+          isSearchingNearby={isSearchingNearby}
+          isDeleting={isDeletingInfra}
+          onStartAddPick={handleInfraStartAddPick}
+          onStartDeletePick={handleInfraStartDeletePick}
+          onCancelDelete={handleInfraCancelDelete}
+          onAdd={handleInfraAdd}
+          onDelete={handleInfraDelete}
+        />
         {error && <div className="app__error">{error}</div>}
         {status === 'loading_layers' && (
           <div className="app__loading">Загрузка данных...</div>
@@ -430,6 +548,8 @@ export default function App() {
           onCoordinatePick={
             mapPickMode ? handleMapCoordinatePick :
             isoPickMode ? handleIsoCoordinatePick :
+            infraAddPickMode ? handleInfraAddCoordPick :
+            infraDeletePickMode ? handleInfraDeleteCoordPick :
             null
           }
         />

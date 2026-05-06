@@ -15,6 +15,7 @@ import type {
   GeoJSONFeature,
   IsochroneEntry,
   LayerVisibility,
+  NearbyInfraObject,
   SelectedBuilding,
 } from '../../types';
 import 'ol/ol.css';
@@ -31,6 +32,8 @@ export interface MapViewHandle {
   showIsoStart: (lon: number, lat: number) => void;
   clearIsoStart: () => void;
   setRegions: (data: GeoJSONFeatureCollection) => void;
+  highlightInfraObjects: (objects: NearbyInfraObject[]) => void;
+  clearInfraHighlight: () => void;
 }
 
 interface MapViewProps {
@@ -104,6 +107,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const selectedSource = useRef(new VectorSource());
     const toolIsochroneSource = useRef(new VectorSource());
     const isoStartSource = useRef(new VectorSource());
+    const infraHighlightSource = useRef(new VectorSource());
 
     const initialFitDone = useRef(false);
     const regionLayer = useRef<VectorLayer | null>(null);
@@ -115,6 +119,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const suggestionsLayer = useRef<VectorLayer | null>(null);
     const toolIsochroneLayer = useRef<VectorLayer | null>(null);
     const isoStartLayer = useRef<VectorLayer | null>(null);
+    const infraHighlightLayer = useRef<VectorLayer | null>(null);
 
     useImperativeHandle(ref, () => ({
       showIsochrones(entries: IsochroneEntry[]) {
@@ -245,6 +250,18 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         selectedSource.current.addFeature(feat);
         mapInstance.current?.getView().animate({ center: fromLonLat([lon, lat]), zoom: 14, duration: 400 });
       },
+
+      highlightInfraObjects(objects: NearbyInfraObject[]) {
+        infraHighlightSource.current.clear();
+        objects.forEach(({ lon, lat }) => {
+          const feat = new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
+          infraHighlightSource.current.addFeature(feat);
+        });
+      },
+
+      clearInfraHighlight() {
+        infraHighlightSource.current.clear();
+      },
     }));
 
     // Init map once
@@ -297,6 +314,21 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         source: toolIsochroneSource.current,
         zIndex: 6,
         visible: false,
+      });
+
+      infraHighlightLayer.current = new VectorLayer({
+        source: infraHighlightSource.current,
+        zIndex: 19,
+        visible: true,
+        style: new Style({
+          image: new RegularShape({
+            fill: new Fill({ color: '#ef4444' }),
+            stroke: new Stroke({ color: '#fff', width: 2 }),
+            points: 4,
+            radius: 10,
+            angle: Math.PI / 4,
+          }),
+        }),
       });
 
       suggestionsLayer.current = new VectorLayer({
@@ -361,6 +393,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
           kindergartenLayer.current,
           schoolLayer.current,
           hospitalLayer.current,
+          infraHighlightLayer.current,
           suggestionsLayer.current,
           selectedLayer,
           isoStartLayer.current,
