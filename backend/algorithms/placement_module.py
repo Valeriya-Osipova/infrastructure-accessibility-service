@@ -7,20 +7,31 @@ from scipy.spatial import KDTree
 import numpy as np
 
 
+# Максимум точек в ответе и минимальное расстояние между ними (~400 м в градусах)
+MAX_SITES = 5
+_MIN_SPACING_DEG = 0.004
+
+
+def _empty_gdf() -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(geometry=gpd.GeoSeries([], crs="EPSG:4326"))
+
+
 @lru_cache(maxsize=None)
 def _get_residential_gdf() -> gpd.GeoDataFrame:
     from repositories.geo_repository import get_buildings
-    return gpd.GeoDataFrame.from_features(
-        get_buildings()["features"], crs="EPSG:4326"
-    )
+    data = get_buildings()
+    if not data["features"]:
+        return _empty_gdf()
+    return gpd.GeoDataFrame.from_features(data["features"], crs="EPSG:4326")
 
 
 @lru_cache(maxsize=None)
 def _get_road_nodes_gdf() -> gpd.GeoDataFrame:
     from repositories.geo_repository import get_road_big_nodes
-    return gpd.GeoDataFrame.from_features(
-        get_road_big_nodes()["features"], crs="EPSG:4326"
-    )
+    data = get_road_big_nodes()
+    if not data["features"]:
+        return _empty_gdf()
+    return gpd.GeoDataFrame.from_features(data["features"], crs="EPSG:4326")
 
 
 @lru_cache(maxsize=None)
@@ -28,9 +39,44 @@ def _get_settlement_centers_gdf() -> gpd.GeoDataFrame:
     from repositories.geo_repository import get_settlement_centers
     data = get_settlement_centers()
     if not data["features"]:
-        return gpd.GeoDataFrame(geometry=gpd.GeoSeries([], crs="EPSG:4326"))
+        return _empty_gdf()
     return gpd.GeoDataFrame.from_features(data["features"], crs="EPSG:4326")
 
+
+# ---------------------------------------------------------------------------
+# Отбор лучших точек
+# ---------------------------------------------------------------------------
+
+def _select_best(
+    candidates: List[Tuple[float, float]],
+    origin: Tuple[float, float],
+    max_n: int = MAX_SITES,
+) -> List[Tuple[float, float]]:
+    """
+    Из кандидатов выбирает max_n лучших:
+      1. Сортирует по расстоянию до origin (ближайшие — приоритетнее).
+      2. Жадно отсеивает дубликаты — не берёт точку ближе ~400 м к уже выбранной.
+    """
+    if not candidates:
+        return []
+    ox, oy = origin
+    scored = sorted(candidates, key=lambda pt: (pt[0] - ox) ** 2 + (pt[1] - oy) ** 2)
+    selected: List[Tuple[float, float]] = []
+    for pt in scored:
+        too_close = any(
+            (pt[0] - s[0]) ** 2 + (pt[1] - s[1]) ** 2 < _MIN_SPACING_DEG ** 2
+            for s in selected
+        )
+        if not too_close:
+            selected.append(pt)
+            if len(selected) >= max_n:
+                break
+    return selected
+
+
+# ---------------------------------------------------------------------------
+# Вспомогательные функции
+# ---------------------------------------------------------------------------
 
 def find_residential_clusters(
     gdf: gpd.GeoDataFrame,
@@ -110,6 +156,10 @@ def _nearest_road_node(
     return None
 
 
+# ---------------------------------------------------------------------------
+# Функции предложений по типу объекта
+# ---------------------------------------------------------------------------
+
 def suggest_kindergarten(
     iso_walk: dict,
     origin: Tuple[float, float],
@@ -121,7 +171,7 @@ def suggest_kindergarten(
     )
     if cluster_pts:
         return {
-            "recommended_sites": cluster_pts,
+            "recommended_sites": _select_best(cluster_pts, origin),
             "fallback_zone": iso_walk,
             "criteria_used": ["Жилые кластеры в зоне пешей доступности 500 м"],
         }
@@ -129,7 +179,7 @@ def suggest_kindergarten(
     settlement_pts = _settlement_centers_in_polygon(polygon)
     if settlement_pts:
         return {
-            "recommended_sites": settlement_pts,
+            "recommended_sites": _select_best(settlement_pts, origin),
             "fallback_zone": iso_walk,
             "criteria_used": ["Центры населённых пунктов в зоне пешей доступности 500 м"],
         }
@@ -160,16 +210,18 @@ def suggest_school(
         find_residential_clusters(_get_residential_gdf()), drive_polygon
     )
     settlement_pts = _settlement_centers_in_polygon(drive_polygon)
-    recommended_sites = cluster_pts + settlement_pts
 
-    if recommended_sites:
+    # Приоритет — точки, которые одновременно близки к жилью И к центру поселения.
+    # Объединяем оба списка; _select_best отберёт ближайшие к origin с разносом.
+    combined = cluster_pts + settlement_pts
+    if combined:
         criteria = []
         if cluster_pts:
             criteria.append("Жилые кластеры в зоне транспортной доступности 15 мин")
         if settlement_pts:
             criteria.append("Центры населённых пунктов в зоне транспортной доступности 15 мин")
         return {
-            "recommended_sites": recommended_sites,
+            "recommended_sites": _select_best(combined, origin),
             "fallback_zone": iso_drive,
             "criteria_used": criteria,
         }
@@ -198,16 +250,21 @@ def suggest_hospital(
 
     settlement_pts = _settlement_centers_in_polygon(drive_polygon)
     road_node_pts = _road_nodes_in_polygon(drive_polygon)
-    priority1 = settlement_pts + road_node_pts
 
-    if priority1:
+    if settlement_pts or road_node_pts:
         criteria = []
+        # Предпочитаем центры поселений (до 3 лучших) + дополняем дорожными узлами
+        best_settlements = _select_best(settlement_pts, origin, max_n=3)
+        remaining = MAX_SITES - len(best_settlements)
+        best_roads = _select_best(road_node_pts, origin, max_n=remaining) if remaining > 0 else []
+        sites = best_settlements + best_roads
+
         if settlement_pts:
             criteria.append("Центры населённых пунктов в зоне транспортной доступности 30 мин")
         if road_node_pts:
             criteria.append("Крупные дорожные узлы в зоне транспортной доступности 30 мин")
         return {
-            "recommended_sites": priority1,
+            "recommended_sites": sites,
             "fallback_zone": iso_drive,
             "criteria_used": criteria,
         }
@@ -217,7 +274,7 @@ def suggest_hospital(
     )
     if cluster_pts:
         return {
-            "recommended_sites": cluster_pts,
+            "recommended_sites": _select_best(cluster_pts, origin),
             "fallback_zone": iso_drive,
             "criteria_used": ["Жилые кластеры в зоне транспортной доступности 30 мин"],
         }
@@ -236,6 +293,10 @@ def suggest_hospital(
         "criteria_used": ["Резервный вариант: зона транспортной изохроны 30 мин"],
     }
 
+
+# ---------------------------------------------------------------------------
+# Публичный API
+# ---------------------------------------------------------------------------
 
 def generate_placement_suggestions(
     object_type: str,
