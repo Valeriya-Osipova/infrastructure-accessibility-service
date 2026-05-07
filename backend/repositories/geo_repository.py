@@ -196,12 +196,15 @@ def get_settlement_centers() -> Dict[str, Any]:
 
 
 def invalidate_cache() -> None:
-    """Сбрасывает кэш репозитория (вызывается после загрузки новых OSM-данных)."""
+    """Сбрасывает кэш данных репозитория (вызывается после изменений в БД).
+
+    Намеренно НЕ сбрасывает _USE_DB: доступность БД не меняется при добавлении/
+    удалении объектов, а пересброс вызывал бы повторный is_db_available() который
+    мог упасть на broken-соединении пула и переключить на файловый fallback.
+    """
     get_buildings.cache_clear()
     get_infrastructure.cache_clear()
     get_infrastructure_by_type.cache_clear()
     get_low_density_areas.cache_clear()
     get_road_big_nodes.cache_clear()
     get_settlement_centers.cache_clear()
-    global _USE_DB
-    _USE_DB = None
