@@ -214,20 +214,16 @@ export default function App() {
 
   /** Перезагружает данные всех слоёв с бэкенда (после загрузки OSM) */
   const refreshLayers = useCallback(async () => {
-    try {
-      const [b, k, s, h] = await Promise.all([
-        api.getBuildings(),
-        api.getKindergartens(),
-        api.getSchools(),
-        api.getHospitals(),
-      ]);
-      setBuildings(b);
-      setKindergartens(k);
-      setSchools(s);
-      setHospitals(h);
-    } catch {
-      // не блокируем UI если обновление слоёв упало
-    }
+    const [b, k, s, h] = await Promise.allSettled([
+      api.getBuildings(),
+      api.getKindergartens(),
+      api.getSchools(),
+      api.getHospitals(),
+    ]);
+    if (b.status === 'fulfilled') setBuildings(b.value);
+    if (k.status === 'fulfilled') setKindergartens(k.value);
+    if (s.status === 'fulfilled') setSchools(s.value);
+    if (h.status === 'fulfilled') setHospitals(h.value);
   }, []);
 
   const handleAnalyze = useCallback(async () => {
@@ -404,16 +400,14 @@ export default function App() {
 
   // Обновляем инфра-слои после добавления/удаления
   const refreshInfraLayers = useCallback(async () => {
-    try {
-      const [k, s, h] = await Promise.all([
-        api.getKindergartens(),
-        api.getSchools(),
-        api.getHospitals(),
-      ]);
-      setKindergartens(k);
-      setSchools(s);
-      setHospitals(h);
-    } catch { /* не блокируем UI */ }
+    const [k, s, h] = await Promise.allSettled([
+      api.getKindergartens(),
+      api.getSchools(),
+      api.getHospitals(),
+    ]);
+    if (k.status === 'fulfilled') setKindergartens(k.value);
+    if (s.status === 'fulfilled') setSchools(s.value);
+    if (h.status === 'fulfilled') setHospitals(h.value);
   }, []);
 
   // Подсвечиваем найденные объекты на карте
